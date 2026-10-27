@@ -1,0 +1,11 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    labels:
+      - dependabot
+      - github-actions
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7

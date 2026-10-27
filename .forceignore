@@ -1,0 +1,4 @@
+# LWC tooling files that aren't Salesforce metadata
+**/jsconfig.json
+**/.eslintrc.json
+**/__tests__/**

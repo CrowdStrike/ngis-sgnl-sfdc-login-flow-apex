@@ -1,0 +1,30 @@
+name: CI
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      # shellcheck is preinstalled on GitHub-hosted Ubuntu runners
+      - name: Lint shell scripts
+        run: shellcheck scripts/*.sh
+
+# Apex compilation and tests need a Salesforce org. To run them in CI, add a
+# job that installs @salesforce/cli, authenticates with an SFDX auth URL
+# stored as a repository secret, and runs `sf project deploy validate` with
+# RunSpecifiedTests (see README "Running tests").
