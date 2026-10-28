@@ -1,0 +1,82 @@
+<template>
+    <lightning-card title="Continuous Identity Configuration" icon-name="standard:settings">
+        <div class="slds-p-horizontal_medium">
+
+            <template lwc:if={loading}>
+                <lightning-spinner alternative-text="Loading" size="small"></lightning-spinner>
+            </template>
+
+            <template lwc:elseif={loadError}>
+                <div class="slds-box slds-box_small slds-theme_error">{loadError}</div>
+            </template>
+
+            <template lwc:elseif={cfg}>
+
+                <template lwc:if={cfg.hasConfigRecord}>
+                    <p class="slds-m-bottom_small">Values below include overrides from the <strong>Default</strong> Login Flow Config record.</p>
+                </template>
+                <template lwc:else>
+                    <p class="slds-m-bottom_small">No <strong>Default</strong> Login Flow Config record exists, so built-in defaults are in use.</p>
+                </template>
+
+                <h3 class="slds-text-heading_small slds-m-top_small slds-m-bottom_x-small">Connection</h3>
+                <dl class="slds-list_horizontal slds-wrap">
+                    <dt class="slds-item_label slds-text-color_weak">Named Credential</dt>
+                    <dd class="slds-item_detail">{cfg.namedCredential}</dd>
+                    <dt class="slds-item_label slds-text-color_weak">API Path</dt>
+                    <dd class="slds-item_detail">{cfg.apiPath}</dd>
+                </dl>
+
+                <h3 class="slds-text-heading_small slds-m-top_medium slds-m-bottom_x-small">SGNL Provider Hook</h3>
+                <p class="slds-m-bottom_x-small">On the SGNL provider hook, set the application Id path to <code>{cfg.routingKeyPath}</code>, then create two integration assignments for this org's Protected System with these application Ids. They're derived from this org's Id, so a refreshed sandbox gets its own values.</p>
+                <dl class="slds-list_horizontal slds-wrap">
+                    <dt class="slds-item_label slds-text-color_weak">Search (list permission sets)</dt>
+                    <dd class="slds-item_detail">{cfg.routingKeySearch}</dd>
+                    <dt class="slds-item_label slds-text-color_weak">Evaluate (access evaluation)</dt>
+                    <dd class="slds-item_detail">{cfg.routingKeyEvaluate}</dd>
+                </dl>
+
+                <h3 class="slds-text-heading_small slds-m-top_medium slds-m-bottom_x-small">Pre-Login Check</h3>
+                <dl class="slds-list_horizontal slds-wrap">
+                    <dt class="slds-item_label slds-text-color_weak">Status</dt>
+                    <dd class="slds-item_detail">{preLoginLabel}</dd>
+                    <dt class="slds-item_label slds-text-color_weak">Action</dt>
+                    <dd class="slds-item_detail">{cfg.preLoginAction}</dd>
+                    <dt class="slds-item_label slds-text-color_weak">Denial Message</dt>
+                    <dd class="slds-item_detail">{cfg.denialMessage}</dd>
+                    <dt class="slds-item_label slds-text-color_weak">Auto-Logout Seconds</dt>
+                    <dd class="slds-item_detail">{cfg.denialAutoLogoutSecs}</dd>
+                </dl>
+
+                <div class="slds-m-top_medium">
+                    <lightning-button
+                        variant="brand"
+                        label="Test Connection"
+                        onclick={handleTest}
+                        disabled={testing}>
+                    </lightning-button>
+                    <a class="slds-button slds-button_neutral slds-m-left_small"
+                       href={cfg.setupUrl}
+                       target="_blank">Edit in Setup</a>
+                </div>
+
+                <template lwc:if={testing}>
+                    <div class="slds-m-top_small slds-is-relative" style="min-height: 2rem;">
+                        <lightning-spinner alternative-text="Testing" size="small"></lightning-spinner>
+                    </div>
+                </template>
+
+                <template lwc:if={testResult}>
+                    <div class={testResultClass}>
+                        <p><strong>HTTP {testResult.statusCode}</strong></p>
+                        <template lwc:if={testResult.hintText}>
+                            <p class="slds-m-top_x-small">{testResult.hintText}</p>
+                        </template>
+                        <pre class="slds-text-body_small slds-m-top_x-small" style="white-space: pre-wrap; word-break: break-word;">{testResult.body}</pre>
+                    </div>
+                </template>
+
+            </template>
+        </div>
+    </lightning-card>
+</template>

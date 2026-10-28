@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomTab xmlns="http://soap.sforce.com/2006/04/metadata">
+    <flexiPage>Login_Flow_Admin</flexiPage>
+    <label>Continuous Identity Admin</label>
+    <motif>Custom53: Bell</motif>
+</CustomTab>

@@ -1,0 +1,136 @@
+<apex:page controller="LoginFlowController" action="{!init}" showHeader="false" sidebar="false">
+    <apex:slds />
+
+    <div class="slds-scope">
+
+        <!-- ============ DENIAL STATE ============ -->
+        <apex:outputPanel rendered="{!denied}" layout="block">
+            <!-- Server-side auto-logout: <meta http-equiv=refresh> is emitted
+                 inside the body which is legal enough for the major browsers
+                 and doesn't require view-state gymnastics to place in <head>. -->
+            <meta http-equiv="refresh"
+                  content="{!denialAutoLogoutSeconds};url=/secur/logout.jsp" />
+
+            <div class="slds-grid slds-grid_align-center slds-p-top_x-large">
+                <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2 slds-large-size_1-of-3">
+                    <div class="slds-card">
+                        <div class="slds-card__header slds-grid">
+                            <header class="slds-media slds-media_center slds-has-flexi-truncate">
+                                <div class="slds-media__body">
+                                    <h2 class="slds-card__header-title slds-text-heading_medium">
+                                        Access Denied
+                                    </h2>
+                                </div>
+                            </header>
+                        </div>
+                        <div class="slds-card__body slds-card__body_inner">
+                            <div class="slds-notify slds-notify_alert slds-alert_error slds-m-bottom_medium"
+                                 role="alert">
+                                <span class="slds-assistive-text">Denied</span>
+                                <h2><apex:outputText value="{!denialMessage}" /></h2>
+                            </div>
+                            <p class="slds-text-body_small slds-m-bottom_medium">
+                                You will be signed out in <apex:outputText value="{!denialAutoLogoutSeconds}" /> seconds.
+                            </p>
+                            <a href="/secur/logout.jsp" class="slds-button slds-button_brand">Sign out now</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Belt-and-braces client-side timer in case the meta refresh is
+                 stripped or blocked; multiplied by 1000 for ms. -->
+            <script>
+                (function () {
+                    var s = parseInt("{!denialAutoLogoutSeconds}", 10);
+                    if (isNaN(s) || s < 0) { s = 10; }
+                    setTimeout(function () {
+                        window.location = '/secur/logout.jsp';
+                    }, s * 1000);
+                })();
+            </script>
+        </apex:outputPanel>
+
+        <!-- ============ NORMAL STATE ============ -->
+        <apex:outputPanel rendered="{!NOT(denied)}" layout="block">
+            <div class="slds-grid slds-grid_align-center slds-p-top_x-large">
+                <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2 slds-large-size_1-of-3">
+
+                    <div class="slds-card">
+                        <div class="slds-card__header slds-grid">
+                            <header class="slds-media slds-media_center slds-has-flexi-truncate">
+                                <div class="slds-media__body">
+                                    <h2 class="slds-card__header-title slds-text-heading_medium">
+                                        Activate Session Permissions
+                                    </h2>
+                                </div>
+                            </header>
+                        </div>
+
+                        <div class="slds-card__body slds-card__body_inner">
+
+                            <p class="slds-m-bottom_medium slds-text-body_regular">
+                                Select the permission sets you need for this session.
+                                You will only see sets your organization has authorized for you.
+                            </p>
+
+                            <!-- Error banner -->
+                            <apex:outputPanel rendered="{!NOT(ISBLANK(errorMessage))}">
+                                <div class="slds-notify slds-notify_alert slds-alert_error slds-m-bottom_medium"
+                                     role="alert">
+                                    <span class="slds-assistive-text">Error</span>
+                                    <h2><apex:outputText value="{!errorMessage}" /></h2>
+                                </div>
+                            </apex:outputPanel>
+
+                            <apex:form>
+                                <!-- Checkbox list -->
+                                <apex:outputPanel rendered="{!availablePermSets.size > 0}">
+                                    <fieldset class="slds-form-element slds-m-bottom_medium">
+                                        <apex:repeat value="{!availablePermSets}" var="opt">
+                                            <div class="slds-form-element__control">
+                                                <div class="slds-checkbox">
+                                                    <apex:inputCheckbox id="chk" value="{!opt.selected}" />
+                                                    <label class="slds-checkbox__label" for="{!$Component.chk}">
+                                                        <span class="slds-checkbox_faux"></span>
+                                                        <span class="slds-form-element__label">
+                                                            <apex:outputText value="{!opt.label}" />
+                                                        </span>
+                                                    </label>
+                                                </div>
+                                            </div>
+                                        </apex:repeat>
+                                    </fieldset>
+
+                                    <div class="slds-m-top_medium">
+                                        <apex:commandButton value="Accept and Continue"
+                                                            action="{!activate}"
+                                                            styleClass="slds-button slds-button_brand" />
+                                        <apex:commandButton value="Continue without activating"
+                                                            action="{!skip}"
+                                                            styleClass="slds-button slds-button_neutral slds-m-left_small"
+                                                            immediate="true" />
+                                    </div>
+                                </apex:outputPanel>
+
+                                <!-- No permission sets: just show the skip button -->
+                                <apex:outputPanel rendered="{!availablePermSets.size == 0}">
+                                    <p class="slds-text-body_small slds-text-color_weak slds-m-bottom_medium">
+                                        No permission sets are available for your account at this time.
+                                    </p>
+                                    <apex:commandButton value="Continue"
+                                                        action="{!skip}"
+                                                        styleClass="slds-button slds-button_brand"
+                                                        immediate="true" />
+                                </apex:outputPanel>
+                            </apex:form>
+
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </apex:outputPanel>
+
+    </div>
+</apex:page>

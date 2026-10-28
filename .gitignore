@@ -1,0 +1,19 @@
+# Salesforce CLI state
+.sf
+.sfdx
+.localdevserver
+
+# Dependencies
+node_modules
+
+# Logs
+*.log
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea
+.vscode
+*.code-workspace
