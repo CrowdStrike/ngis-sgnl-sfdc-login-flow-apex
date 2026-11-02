@@ -10,7 +10,7 @@
  */
 public with sharing class LoginFlowConfig {
 
-    private static final String DEFAULT_RECORD = 'Default';
+    public static final String DEFAULT_RECORD = 'Default';
 
     private static final String  DEFAULT_PRELOGIN_ACTION = 'login';
     private static final String  DEFAULT_DENY_MSG        = 'Your account is not authorized to access this org right now. You will be signed out automatically.';
@@ -32,6 +32,11 @@ public with sharing class LoginFlowConfig {
 
     // True when the Default record exists (shown in the admin UI)
     public Boolean hasConfigRecord      { get; private set; }
+
+    // True when the value isn't set on the record, so the built-in default applies
+    public Boolean preLoginActionIsDefault       { get; private set; }
+    public Boolean denialMessageIsDefault        { get; private set; }
+    public Boolean denialAutoLogoutSecsIsDefault { get; private set; }
 
     private static LoginFlowConfig cached;
     private static LoginFlowConfig mock;
@@ -67,6 +72,9 @@ public with sharing class LoginFlowConfig {
         c.denialMessage        = denialMsg;
         c.denialAutoLogoutSecs = denialSecs;
         c.hasConfigRecord      = false;
+        c.preLoginActionIsDefault       = false;
+        c.denialMessageIsDefault        = false;
+        c.denialAutoLogoutSecsIsDefault = false;
         return c;
     }
 
@@ -84,6 +92,10 @@ public with sharing class LoginFlowConfig {
         c.preLoginAction       = blankFallback(r?.Pre_Login_Action__c, DEFAULT_PRELOGIN_ACTION);
         c.denialMessage        = blankFallback(r?.Denial_Message__c, DEFAULT_DENY_MSG);
         c.denialAutoLogoutSecs = clampSeconds(r?.Denial_Auto_Logout_Seconds__c);
+        c.preLoginActionIsDefault       = String.isBlank(r?.Pre_Login_Action__c);
+        c.denialMessageIsDefault        = String.isBlank(r?.Denial_Message__c);
+        c.denialAutoLogoutSecsIsDefault = r?.Denial_Auto_Logout_Seconds__c == null
+            || r.Denial_Auto_Logout_Seconds__c < 1;
         return c;
     }
 

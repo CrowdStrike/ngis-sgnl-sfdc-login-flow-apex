@@ -122,6 +122,19 @@ TOKEN_HOST="api.${ACCESS_HOST#access.}"
 info "API endpoint:   https://$ACCESS_HOST"
 info "Token endpoint: https://$TOKEN_HOST/oauth2/token"
 
+cat <<EOF
+
+The login flow calls SGNL with a Falcon API client. If you don't have one
+for this org yet, in the Falcon console for this cloud:
+  1. Open API clients and keys (under Support and resources) and create an
+     API client with the ${c_bold}sgnl-access:read${c_reset} scope. Use one client per
+     Salesforce org.
+  2. Copy the client id and secret. The secret is only shown once.
+  3. Map the client to your SGNL provider. Without the mapping, Test
+     Connection returns HTTP 401 or 403.
+You can also leave the client id blank and set it in Setup later.
+
+EOF
 prompt "Falcon client id (leave blank to set credentials later in Setup): "
 read -r CLIENT_ID
 CLIENT_SECRET=""
@@ -217,41 +230,73 @@ grep -q "https://$ACCESS_HOST<" "$NC_FILE" || die "Failed to patch the Named Cre
 grep -q "https://$TOKEN_HOST/oauth2/token<" "$EC_FILE" || die "Failed to patch the External Credential token URL."
 ok "Staged with https://$ACCESS_HOST and https://$TOKEN_HOST/oauth2/token"
 
-# Pre-login settings go into the LoginFlow_Config.Default record. Without a
-# record every value uses its built-in default, so only write one if needed.
-if [[ "$PRELOGIN_ENABLED" == true ]]; then
-  EXISTING_CFG="$(sf data query --target-org "$ORG_ALIAS" \
-    --query "SELECT DeveloperName FROM LoginFlow_Config__mdt WHERE DeveloperName='Default'" \
-    --json 2>/dev/null | jq -r '.result.totalSize // 0')"
-  WRITE_CFG=true
-  if [[ "$EXISTING_CFG" == "1" ]]; then
+# The flow reads its settings from LoginFlow_Config.Default. Save every
+# setting, so admins see real values when they edit the record in Setup. A new
+# record gets all four. An existing record keeps the values it has: blank
+# fields get the default, and the pre-login fields change only if the operator
+# asks. On first install the type doesn't exist yet, so a failed query counts
+# as no record.
+CFG_JSON="$(sf data query --target-org "$ORG_ALIAS" \
+  --query "SELECT Pre_Login_Action__c, Denial_Message__c, Denial_Auto_Logout_Seconds__c FROM LoginFlow_Config__mdt WHERE DeveloperName='Default'" \
+  --json 2>/dev/null || true)"
+EXISTING_CFG="$(jq -r '.result.totalSize // 0' <<<"$CFG_JSON" 2>/dev/null || true)"
+cfg_field() { jq -r ".result.records[0].$1 // empty" <<<"$CFG_JSON" 2>/dev/null || true; }
+
+CMT_DIR="$STAGE_DIR/force-app/main/default/customMetadata"
+CMT_FILE="$CMT_DIR/LoginFlow_Config.Default.md-meta.xml"
+# Keep in sync with LoginFlowConfig.DEFAULT_DENY_MSG and DEFAULT_DENY_SECONDS.
+DEFAULT_DENY_MSG='Your account is not authorized to access this org right now. You will be signed out automatically.'
+DEFAULT_DENY_SECONDS=10
+
+CMT_VALUES=""
+CMT_FIELDS=""
+cmt_value() {  # field, xsd type, value
+  CMT_VALUES+="    <values>
+        <field>$1</field>
+        <value xsi:type=\"$2\">$3</value>
+    </values>
+"
+  CMT_FIELDS+="${CMT_FIELDS:+, }$1"
+}
+
+if [[ "$EXISTING_CFG" != "1" ]]; then
+  cmt_value Pre_Login_Check_Enabled__c xsd:boolean "$PRELOGIN_ENABLED"
+  cmt_value Pre_Login_Action__c xsd:string "$PRELOGIN_ACTION"
+  cmt_value Denial_Message__c xsd:string "$DEFAULT_DENY_MSG"
+  cmt_value Denial_Auto_Logout_Seconds__c xsd:double "$DEFAULT_DENY_SECONDS"
+else
+  if [[ "$PRELOGIN_ENABLED" == true ]]; then
     prompt "A Default config record already exists. Overwrite its pre-login fields? [y/N]: "
     read -r OVERWRITE
-    [[ "$OVERWRITE" =~ ^[Yy]$ ]] || WRITE_CFG=false
+    if [[ "$OVERWRITE" =~ ^[Yy]$ ]]; then
+      cmt_value Pre_Login_Check_Enabled__c xsd:boolean true
+      cmt_value Pre_Login_Action__c xsd:string "$PRELOGIN_ACTION"
+    fi
   fi
-  if [[ "$WRITE_CFG" == true ]]; then
-    CMT_DIR="$STAGE_DIR/force-app/main/default/customMetadata"
-    mkdir -p "$CMT_DIR"
-    # Only the fields set here are written; other fields keep their values.
-    cat > "$CMT_DIR/LoginFlow_Config.Default.md-meta.xml" <<XML
+  if [[ -z "$(cfg_field Pre_Login_Action__c)" && "$CMT_FIELDS" != *Pre_Login_Action__c* ]]; then
+    cmt_value Pre_Login_Action__c xsd:string login
+  fi
+  if [[ -z "$(cfg_field Denial_Message__c)" ]]; then
+    cmt_value Denial_Message__c xsd:string "$DEFAULT_DENY_MSG"
+  fi
+  if [[ -z "$(cfg_field Denial_Auto_Logout_Seconds__c)" ]]; then
+    cmt_value Denial_Auto_Logout_Seconds__c xsd:double "$DEFAULT_DENY_SECONDS"
+  fi
+fi
+
+if [[ -n "$CMT_VALUES" ]]; then
+  mkdir -p "$CMT_DIR"
+  # Only the fields listed are written; other fields keep their values.
+  cat > "$CMT_FILE" <<XML
 <?xml version="1.0" encoding="UTF-8"?>
 <CustomMetadata xmlns="http://soap.sforce.com/2006/04/metadata" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
     <label>Default</label>
     <protected>false</protected>
-    <values>
-        <field>Pre_Login_Check_Enabled__c</field>
-        <value xsi:type="xsd:boolean">true</value>
-    </values>
-    <values>
-        <field>Pre_Login_Action__c</field>
-        <value xsi:type="xsd:string">$PRELOGIN_ACTION</value>
-    </values>
-</CustomMetadata>
+${CMT_VALUES}</CustomMetadata>
 XML
-    ok "Staged LoginFlow_Config.Default with pre-login enabled (action: $PRELOGIN_ACTION)"
-  else
-    info "Leaving the existing config record unchanged."
-  fi
+  ok "Staged LoginFlow_Config.Default: $CMT_FIELDS"
+else
+  info "The Default config record already has every setting; leaving it unchanged."
 fi
 
 # -----------------------------------------------------------------------------
@@ -280,6 +325,7 @@ manual_credential_steps() {
   warn "Set the credentials manually:"
   warn "  Setup → Named Credentials → External Credentials → $EXTERNAL_CREDENTIAL"
   warn "  → Principals → $PRINCIPAL_NAME → Edit → Client ID and Client Secret"
+  warn "Then click Test Connection on the admin page before attaching the Login Flow."
 }
 
 if [[ -z "$CLIENT_ID" ]]; then
@@ -345,8 +391,8 @@ else
 fi
 
 # Every user who hits the login flow needs the user permission set before the
-# flow is attached; without it the SGNL callout fails (and with the pre-login
-# check on, they are denied).
+# flow is attached. It's the only grant for the LoginFlowPermSets page, so
+# without it the user gets Insufficient Privileges and can't log in.
 #
 # Users are assigned in pages ordered by Id, one anonymous Apex run per page,
 # so large profiles stay under the per-transaction limits (10,000 DML rows,
@@ -416,9 +462,76 @@ if (( TOTAL_ADDED != TOTAL_NEEDED )); then
 fi
 
 # -----------------------------------------------------------------------------
+# Step 5: Test Connection
+# -----------------------------------------------------------------------------
+# Runs the admin page's Test Connection as the running user, who now has the
+# admin permission set and so the credential access. It only passes once the
+# credentials are set and the SGNL provider hook routes this org.
+heading "5. Test Connection"
+
+TEST_PASSED=false
+if [[ -z "$CLIENT_ID" ]]; then
+  warn "Skipping: no client credentials supplied."
+else
+  cat <<EOF
+Test Connection calls SGNL as you. It passes only after the SGNL provider
+hook has the application Id path {\$.context.routingKey} and two integration
+assignments for this org's Protected System:
+  Search (list permission sets, with the permission set transform):
+    $CONTEXT_ORG_SEARCH
+  Evaluate (access evaluation):
+    $CONTEXT_ORG_EVALUATE
+
+EOF
+  prompt "Run Test Connection now? [Y/n]: "
+  read -r RUN_TEST
+  if [[ "$RUN_TEST" =~ ^[Nn]$ ]]; then
+    info "Skipped. Run Test Connection on the admin page before attaching the Login Flow."
+  else
+    cat > "$WORK_DIR/test_connection.apex" <<'APEX'
+LoginFlowAdminController.TestResultDTO r = LoginFlowAdminController.testConnection();
+System.debug('NGIS_TEST=' + r.statusCode + '/' + r.ok);
+System.debug('NGIS_HINT=' + r.hintText);
+System.debug('NGIS_BODY=' + (r.body == null ? '' : r.body.abbreviate(500)));
+APEX
+    if ! sf apex run --file "$WORK_DIR/test_connection.apex" --target-org "$ORG_ALIAS" \
+        > "$WORK_DIR/test_connection.log" 2>&1; then
+      cat "$WORK_DIR/test_connection.log"
+      warn "Could not run Test Connection. Use the button on the admin page instead."
+    else
+      TEST_RESULT="$(grep -oE 'NGIS_TEST=[0-9]+/(true|false)' "$WORK_DIR/test_connection.log" | head -1 | cut -d= -f2 || true)"
+      TEST_STATUS="${TEST_RESULT%/*}"
+      if [[ "${TEST_RESULT#*/}" == true ]]; then
+        TEST_PASSED=true
+        ok "Test Connection passed (HTTP $TEST_STATUS)."
+      else
+        fail "Test Connection failed (HTTP ${TEST_STATUS:-unknown})."
+        # Match the debug output, not the echoed source lines.
+        TEST_HINT="$(grep -oE '\|DEBUG\|NGIS_HINT=.*' "$WORK_DIR/test_connection.log" | head -1 | cut -d= -f2- || true)"
+        TEST_BODY="$(grep -oE '\|DEBUG\|NGIS_BODY=.*' "$WORK_DIR/test_connection.log" | head -1 | cut -d= -f2- || true)"
+        [[ -n "$TEST_HINT" && "$TEST_HINT" != null ]] && warn "$TEST_HINT"
+        [[ -n "$TEST_BODY" ]] && info "Response: $TEST_BODY"
+        warn "Fix this before attaching the Login Flow, then rerun the script or use Test Connection on the admin page."
+      fi
+    fi
+  fi
+fi
+
+# -----------------------------------------------------------------------------
 # Done
 # -----------------------------------------------------------------------------
 heading "Done"
+
+if [[ "$TEST_PASSED" == true ]]; then
+  TEST_STEP="  2. Test Connection passed. To recheck later, open the admin page and
+     click \"Test Connection\".
+     ${c_dim}sf org open --target-org $ORG_ALIAS --path /lightning/n/Login_Flow_Admin${c_reset}"
+else
+  TEST_STEP="  2. ${c_bold}Test Connection hasn't passed yet.${c_reset} Set the client credentials if
+     you skipped them, then open the admin page and click \"Test Connection\".
+     It should return HTTP 200 and a JSON body listing your permission sets.
+     ${c_dim}sf org open --target-org $ORG_ALIAS --path /lightning/n/Login_Flow_Admin${c_reset}"
+fi
 
 cat <<EOF
 ${c_green}${c_bold}Login flow bootstrapped.${c_reset}
@@ -434,17 +547,16 @@ Next steps:
          $CONTEXT_ORG_EVALUATE
      The admin page shows the same values.
 
-  2. Open the admin page and click "Test Connection". It should return
-     HTTP 200 and a JSON body listing your permission sets.
-     ${c_dim}sf org open --target-org $ORG_ALIAS --path /lightning/n/Login_Flow_Admin${c_reset}
+$TEST_STEP
 
   3. Only after Test Connection succeeds, attach the Login Flow:
      Setup → Identity → Login Flows → New. Flow Type "Visualforce Page",
      page LoginFlowPermSets, profile '$PROFILE_NAME'. Keep an admin on a
      profile without the flow.
 
-  4. Users added to '$PROFILE_NAME' later need the $USER_PERMSET
-     permission set, or the flow can't call SGNL for them.
+  4. Assign $USER_PERMSET to users added to '$PROFILE_NAME' later,
+     before they log in. Without it they get Insufficient Privileges and
+     can't log in.
 
   5. Test the flow: log in with a user on '$PROFILE_NAME'. They should see
      the permission set picker after authenticating.

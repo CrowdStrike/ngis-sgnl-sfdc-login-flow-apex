@@ -41,6 +41,10 @@ export default class LoginFlowAdmin extends LightningElement {
         return this.cfg && this.cfg.preLoginCheckEnabled ? 'Enabled' : 'Disabled';
     }
 
+    get setupLabel() {
+        return this.cfg && this.cfg.hasConfigRecord ? 'Edit in Setup' : 'Create in Setup';
+    }
+
     get testResultClass() {
         const theme = this.testResult && this.testResult.ok ? 'slds-theme_success' : 'slds-theme_error';
         return `slds-box slds-box_small slds-m-top_medium ${theme}`;

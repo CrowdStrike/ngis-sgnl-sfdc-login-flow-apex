@@ -32,26 +32,27 @@ public with sharing class LoginFlowAdminController {
         dto.denialMessage        = c.denialMessage;
         dto.denialAutoLogoutSecs = c.denialAutoLogoutSecs;
         dto.hasConfigRecord      = c.hasConfigRecord;
+        dto.preLoginActionIsDefault       = c.preLoginActionIsDefault;
+        dto.denialMessageIsDefault        = c.denialMessageIsDefault;
+        dto.denialAutoLogoutSecsIsDefault = c.denialAutoLogoutSecsIsDefault;
         dto.setupUrl             = setupUrl();
         return dto;
     }
 
     /**
-     * The Setup detail page for the LoginFlow_Config custom metadata type,
-     * which lists its fields and has Manage Records. Linking to the key
-     * prefix instead lands on the bare record list, which is empty until a
-     * Default record exists.
+     * The Setup edit page for the Default LoginFlow_Config record, or the
+     * new-record page when there's no Default record yet. retURL sends Cancel
+     * to the record (or the record list); without it Cancel lands on a page
+     * that doesn't exist in Lightning Setup.
      */
     @TestVisible
     private static String setupUrl() {
-        List<EntityDefinition> defs = [
-            SELECT DurableId FROM EntityDefinition
-            WHERE QualifiedApiName = 'LoginFlow_Config__mdt' LIMIT 1
-        ];
-        String target = defs.isEmpty()
-            ? LoginFlow_Config__mdt.SObjectType.getDescribe().getKeyPrefix()
-            : defs[0].DurableId;
-        return '/lightning/setup/CustomMetadata/page?address=%2F' + target;
+        LoginFlow_Config__mdt rec = LoginFlow_Config__mdt.getInstance(LoginFlowConfig.DEFAULT_RECORD);
+        String target = rec != null
+            ? rec.Id
+            : LoginFlow_Config__mdt.SObjectType.getDescribe().getKeyPrefix();
+        String editPage = '/' + target + '/e?retURL=' + EncodingUtil.urlEncode('/' + target, 'UTF-8');
+        return '/lightning/setup/CustomMetadata/page?address=' + EncodingUtil.urlEncode(editPage, 'UTF-8');
     }
 
     /**
@@ -96,6 +97,10 @@ public with sharing class LoginFlowAdminController {
         @AuraEnabled public String  denialMessage        { get; set; }
         @AuraEnabled public Integer denialAutoLogoutSecs { get; set; }
         @AuraEnabled public Boolean hasConfigRecord      { get; set; }
+        // True when the field is blank on the record and the built-in default applies
+        @AuraEnabled public Boolean preLoginActionIsDefault       { get; set; }
+        @AuraEnabled public Boolean denialMessageIsDefault        { get; set; }
+        @AuraEnabled public Boolean denialAutoLogoutSecsIsDefault { get; set; }
         @AuraEnabled public String  setupUrl             { get; set; }
     }
 

@@ -86,13 +86,13 @@ It prompts for:
 
 1. **Org alias**: the `sf` alias you authenticated
 2. **Falcon cloud**: US-1, US-2 or EU-1, or another `access.<cloud>.crowdstrike.com` host. The token host `api.<cloud>.crowdstrike.com` is derived from it. One cloud per org.
-3. **Falcon client id and secret**: optional; leave blank to set them in Setup later
+3. **Falcon client id and secret**: optional; leave blank to set them in Setup later. The script first lists what the API client needs: the `sgnl-access:read` scope, one client per org, and a mapping to your SGNL provider.
 4. **Profile name**: the profile whose users should go through the login flow
 5. **Pre-login check**: optional
 
-Then it deploys `force-app` and `sgnl-credentials`, sets the client id and secret on the `NGIS_SGNL_Principal` principal, assigns `NGIS_SGNL_Login_Flow_Admin` to you and `NGIS_SGNL_Login_Flow_User` to every active user on the profile, and prints the two SGNL provider hook application Ids for this org. It also prints the Setup steps to attach the Login Flow to the profile, which is manual. Attach it only after Test Connection succeeds.
+Then it deploys `force-app` and `sgnl-credentials`, creates the `LoginFlow_Config.Default` record with every setting filled in (see [Configuration](#configuration)), sets the client id and secret on the `NGIS_SGNL_Principal` principal, assigns `NGIS_SGNL_Login_Flow_Admin` to you and `NGIS_SGNL_Login_Flow_User` to every active user on the profile, and prints the two SGNL provider hook application Ids for this org. If you supplied credentials, it then offers to run Test Connection and shows the result. It also prints the Setup steps to attach the Login Flow to the profile, which is manual. Attach it only after Test Connection succeeds.
 
-The script is safe to re-run. Existing assignments are left alone; credentials are updated in place.
+The script is safe to re-run. Existing assignments are left alone; credentials are updated in place; an existing config record is kept unless you choose to overwrite its pre-login fields.
 
 ### Manual deployment
 
@@ -114,9 +114,9 @@ Then, in Setup:
 
 ## Configuration
 
-All settings are optional. With no `LoginFlow_Config.Default` record, the defaults below apply.
+Settings live on the `LoginFlow_Config.Default` record, which the bootstrap script creates with every value filled in. A blank field, or no record at all, uses the default below. The admin page shows those values as "Not set" with the default, and each field's help text in Setup gives its default.
 
-To change a value: **Setup → Custom Metadata Types → Login Flow Config → Manage Records**, then create or edit the record named `Default`. Editing needs the **Customize Application** permission. The admin page has an **Edit in Setup** link.
+To change a value: **Setup → Custom Metadata Types → Login Flow Config → Manage Records**, then create or edit the record named `Default`. Editing needs the **Customize Application** permission. On the admin page, **Edit in Setup** opens the record's edit page, or **Create in Setup** opens a new record when there isn't one yet.
 
 | Field | Default | What it does |
 |-------|---------|--------------|

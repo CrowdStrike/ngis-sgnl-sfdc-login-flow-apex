@@ -14,6 +14,9 @@ private class LoginFlowConfigTest {
         Assert.areEqual('login', c.preLoginAction);
         Assert.isTrue(String.isNotBlank(c.denialMessage));
         Assert.areEqual(10, c.denialAutoLogoutSecs);
+        Assert.isTrue(c.preLoginActionIsDefault);
+        Assert.isTrue(c.denialMessageIsDefault);
+        Assert.isTrue(c.denialAutoLogoutSecsIsDefault);
     }
 
     @IsTest
@@ -32,6 +35,9 @@ private class LoginFlowConfigTest {
         Assert.areEqual('signin', c.preLoginAction);
         Assert.areEqual('Nope.', c.denialMessage);
         Assert.areEqual(30, c.denialAutoLogoutSecs);
+        Assert.isFalse(c.preLoginActionIsDefault);
+        Assert.isFalse(c.denialMessageIsDefault);
+        Assert.isFalse(c.denialAutoLogoutSecsIsDefault);
     }
 
     @IsTest
@@ -51,6 +57,9 @@ private class LoginFlowConfigTest {
         Assert.isTrue(c.hasConfigRecord);
         Assert.areEqual('login', c.preLoginAction);
         Assert.isTrue(String.isNotBlank(c.denialMessage));
+        Assert.isTrue(c.preLoginActionIsDefault);
+        Assert.isTrue(c.denialMessageIsDefault);
+        Assert.isTrue(c.denialAutoLogoutSecsIsDefault);
     }
 
     @IsTest

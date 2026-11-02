@@ -122,7 +122,11 @@ Saving from the LWC would need `Metadata.Operations.enqueueDeployment`, which ne
 
 ### Seeding the record
 
-The bootstrap script writes a `customMetadata/LoginFlow_Config.Default.md-meta.xml` into its temporary copy of the project, only when the operator enables the pre-login check. The file declares the `xsi`/`xsd` namespaces and types each value (`xsd:boolean`, `xsd:string`). Fields omitted from the file are left unchanged on update, so it doesn't overwrite other edits made in Setup.
+The bootstrap script writes a `customMetadata/LoginFlow_Config.Default.md-meta.xml` into its temporary copy of the project. When no `Default` record exists, the file sets all four fields, so the Setup edit form shows real values instead of blanks. The default denial message and delay in the script must match `LoginFlowConfig`. When a record exists, the script writes only the pre-login fields, and only if the operator asks it to. The file declares the `xsi`/`xsd` namespaces and types each value (`xsd:boolean`, `xsd:string`, `xsd:double`). Fields omitted from the file are left unchanged on update, so it doesn't overwrite other edits made in Setup.
+
+The admin page shows the saved values. A field left blank on the record still falls back to its default, and the page shows it as `Not set (default: <value>)`; the field help text in Setup names the same default.
+
+The type ships its own page layout. Without one, Salesforce generates a layout with only the standard fields, and the Setup edit form shows none of the settings.
 
 Don't commit a CMT record to source: it would overwrite Setup edits on every deploy. If you need a committed record, create it in Setup and retrieve it with `sf project retrieve start --metadata CustomMetadata:LoginFlow_Config.Default`.
 
@@ -182,7 +186,7 @@ Salesforce lets a user activate their own assigned session permission sets with 
 
 ## Admin UI (LWC)
 
-- Read-only: effective values (with defaults applied), whether a `Default` record exists, and an **Edit in Setup** link.
+- Read-only: the saved values (blank fields labeled with the default they fall back to), whether a `Default` record exists, and an **Edit in Setup** link to the record's edit form.
 - **Test Connection** fires a live `listPermissionSets` call as the admin. It never throws: callout failures (including token-fetch failures) return `statusCode: 0` with the exception text and a hint; 401/403 get a hint about the API client's scope and provider mapping. It tests the saved configuration, not anything typed on the page.
 - The admin needs External Credential principal access because Test Connection calls out as them; `NGIS_SGNL_Login_Flow_Admin` grants it along with the app and tab.
 
@@ -201,7 +205,8 @@ The Login Flow is attached per profile, but the profile's Login Flow setting onl
 - **Never touches the working tree.** It copies the project into `mktemp -d`, patches the hosts and optional CMT record there, and deploys from the copy.
 - **Hosts are allowlisted.** The access host must match `^access\.([a-z0-9-]+\.)*crowdstrike\.(com|red|black)$` (the same check as the CrowdStrike GitHub policy action); the token host is `api.` plus the rest. Validated hosts are safe to substitute with `sed`.
 - **The secret never appears on a command line.** It's read with `read -rs`, passed to `jq` through the environment, written to a mode-600 file (`umask 077`), and sent with `sf api request rest --body @file`. POST creates the principal's credentials; PUT updates them on re-runs.
-- **Lockout ordering.** The script never attaches the Login Flow. It prints the Setup steps to attach it last, after the user permission set is assigned and after Test Connection. If the assignment fails, the script stops and says not to attach the flow. To attach it by deployment instead, use the profile's `loginFlows` metadata (`LoginFlow` isn't available through the REST or Tooling API). A Profile deploy changes only the elements in the file, and Profile metadata uses API names, not display names: Standard User is `Standard`.
+- **Lockout ordering.** The script never attaches the Login Flow. It prints the Setup steps to attach it last, after the user permission set is assigned and after Test Connection. If the assignment fails, the script stops and says not to attach the flow. To attach the flow by deployment instead, use the profile's `loginFlows` metadata (`LoginFlow` isn't available through the REST or Tooling API). A Profile deploy changes only the elements in the file, and Profile metadata uses API names, not display names: Standard User is `Standard`.
+- **Test Connection from the script.** After the permission sets, the script runs `LoginFlowAdminController.testConnection()` as anonymous Apex, so the result matches the admin page's button. It runs as the operator, who now has the admin permission set and with it the credential access. It reads the result from `USER_DEBUG` lines, because `sf apex run` also echoes the source. The closing steps say whether the test passed.
 - **Paged assignment.** Users are assigned in pages of 5,000, ordered by Id, one anonymous Apex run per page, so large profiles stay under the per-transaction limits (10,000 DML rows, 50,000 query rows). Each page resumes after the previous page's last Id, so users whose assignment keeps failing (for example a license mismatch) can't stall the loop. If a page's result can't be read, the script stops without creating the flow.
 - **Idempotent.** Existing assignments are left alone; credentials are updated.
 - **`jq` is required** for parsing `sf --json` output reliably.
