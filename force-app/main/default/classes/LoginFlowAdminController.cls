@@ -18,6 +18,15 @@ public with sharing class LoginFlowAdminController {
         'The authorizer rejected the request. Check that the Falcon API client has the '
         + 'sgnl-access:read scope and is mapped to your SGNL provider.';
 
+    @TestVisible private static final String EXTERNAL_CREDENTIAL = 'NGIS_SGNL_Falcon_OAuth';
+    @TestVisible private static final String PRINCIPAL           = 'NGIS_SGNL_Principal';
+    @TestVisible private static final String CREDENTIAL_UNKNOWN  = 'Unknown';
+    private static final String CREDENTIAL_SETUP_URL = '/lightning/setup/NamedCredential/home';
+    private static final String LOGIN_FLOW_SETUP_URL = '/lightning/setup/LoginFlow/home';
+
+    // ConnectApi.NamedCredentials can't run in unit tests; tests set the status here
+    @TestVisible private static String credentialStatusOverride;
+
     @AuraEnabled(cacheable=false)
     public static ConfigDTO getConfig() {
         LoginFlowConfig c = LoginFlowConfig.getInstance();
@@ -36,7 +45,28 @@ public with sharing class LoginFlowAdminController {
         dto.denialMessageIsDefault        = c.denialMessageIsDefault;
         dto.denialAutoLogoutSecsIsDefault = c.denialAutoLogoutSecsIsDefault;
         dto.setupUrl             = setupUrl();
+        dto.credentialStatus     = credentialStatus();
+        dto.credentialSetupUrl   = CREDENTIAL_SETUP_URL;
+        dto.loginFlowSetupUrl    = LOGIN_FLOW_SETUP_URL;
         return dto;
+    }
+
+    /**
+     * Whether the External Credential principal has client credentials:
+     * Configured, NotConfigured, or Unknown when the status can't be read
+     * (for example, the admin lacks the permission ConnectApi needs).
+     */
+    @TestVisible
+    private static String credentialStatus() {
+        if (credentialStatusOverride != null) { return credentialStatusOverride; }
+        try {
+            ConnectApi.Credential c = ConnectApi.NamedCredentials.getCredential(
+                EXTERNAL_CREDENTIAL, PRINCIPAL, ConnectApi.CredentialPrincipalType.NamedPrincipal);
+            return c.authenticationStatus == null ? CREDENTIAL_UNKNOWN : String.valueOf(c.authenticationStatus);
+        } catch (Exception e) {
+            System.debug(LoggingLevel.WARN, 'SGNL login flow credential status failed: ' + e.getMessage());
+            return CREDENTIAL_UNKNOWN;
+        }
     }
 
     /**
@@ -102,6 +132,11 @@ public with sharing class LoginFlowAdminController {
         @AuraEnabled public Boolean denialMessageIsDefault        { get; set; }
         @AuraEnabled public Boolean denialAutoLogoutSecsIsDefault { get; set; }
         @AuraEnabled public String  setupUrl             { get; set; }
+        // Setup checklist: credential status (Configured, NotConfigured or
+        // Unknown) and where to fix each step
+        @AuraEnabled public String  credentialStatus     { get; set; }
+        @AuraEnabled public String  credentialSetupUrl   { get; set; }
+        @AuraEnabled public String  loginFlowSetupUrl    { get; set; }
     }
 
     public class TestResultDTO {

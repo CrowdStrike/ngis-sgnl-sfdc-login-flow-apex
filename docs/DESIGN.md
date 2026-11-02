@@ -126,7 +126,7 @@ The bootstrap script writes a `customMetadata/LoginFlow_Config.Default.md-meta.x
 
 The admin page shows the saved values. A field left blank on the record still falls back to its default, and the page shows it as `Not set (default: <value>)`; the field help text in Setup names the same default.
 
-The type ships its own page layout. Without one, Salesforce generates a layout with only the standard fields, and the Setup edit form shows none of the settings.
+The type ships its own page layout. Without one, Salesforce generates a layout with only the standard fields, and the Setup edit form shows none of the settings. The settings come first. Salesforce requires Label, Name, Protected Component and Namespace Prefix on every custom metadata layout, so they sit last, in a section titled "Record name (keep it Default)". The flow reads only the record named `Default`, so a renamed record falls back to the defaults.
 
 Don't commit a CMT record to source: it would overwrite Setup edits on every deploy. If you need a committed record, create it in Setup and retrieve it with `sf project retrieve start --metadata CustomMetadata:LoginFlow_Config.Default`.
 
@@ -187,6 +187,7 @@ Salesforce lets a user activate their own assigned session permission sets with 
 ## Admin UI (LWC)
 
 - Read-only: the saved values (blank fields labeled with the default they fall back to), whether a `Default` record exists, and an **Edit in Setup** link to the record's edit form.
+- A setup checklist: client credentials, SGNL provider hook, Test Connection, attaching the Login Flow. The credential status comes from `ConnectApi.NamedCredentials.getCredential()` for the `NGIS_SGNL_Principal` principal. If the status can't be read, for example because the admin lacks the permission it needs, the page shows Unknown and stays usable. Apex can't tell whether a profile has the Login Flow attached, so that step is instructions and a link only.
 - **Test Connection** fires a live `listPermissionSets` call as the admin. It never throws: callout failures (including token-fetch failures) return `statusCode: 0` with the exception text and a hint; 401/403 get a hint about the API client's scope and provider mapping. It tests the saved configuration, not anything typed on the page.
 - The admin needs External Credential principal access because Test Connection calls out as them; `NGIS_SGNL_Login_Flow_Admin` grants it along with the app and tab.
 

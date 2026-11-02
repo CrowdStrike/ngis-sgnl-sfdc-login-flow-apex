@@ -129,7 +129,7 @@ The routing keys aren't configurable. They're always the running org's 15-charac
 
 ### Admin page
 
-Open **Continuous Identity Admin** from the App Launcher (requires `NGIS SGNL Login Flow Admin`). It shows the effective configuration, and the application Id path and two application Ids to enter on the SGNL provider hook for this org. Its **Test Connection** button makes a live `listPermissionSets` call as you and shows the raw response and a hint on failure.
+Open **Continuous Identity Admin** from the App Launcher (requires `NGIS SGNL Login Flow Admin`). It shows the saved configuration, and the application Id path and two application Ids to enter on the SGNL provider hook for this org. Its **Test Connection** button makes a live `listPermissionSets` call as you and shows the raw response and a hint on failure. A **Setup Checklist** below shows whether the client credentials are set, what to enter on the SGNL provider hook, the Test Connection result, and how to attach the Login Flow, with links to the Setup pages.
 
 ---
 

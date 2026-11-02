@@ -55,6 +55,26 @@ private class LoginFlowAdminControllerTest {
     }
 
     @IsTest
+    static void getConfig_reportsCredentialStatusAndSetupLinks() {
+        useConfig();
+        LoginFlowAdminController.credentialStatusOverride = 'NotConfigured';
+
+        LoginFlowAdminController.ConfigDTO dto = LoginFlowAdminController.getConfig();
+
+        Assert.areEqual('NotConfigured', dto.credentialStatus);
+        Assert.areEqual('/lightning/setup/NamedCredential/home', dto.credentialSetupUrl);
+        Assert.areEqual('/lightning/setup/LoginFlow/home', dto.loginFlowSetupUrl);
+    }
+
+    @IsTest
+    static void credentialStatus_neverThrows() {
+        // Whether or not ConnectApi works in a test context, this must not throw
+        String status = LoginFlowAdminController.credentialStatus();
+
+        Assert.isTrue(String.isNotBlank(status), 'Expected a status, got ' + status);
+    }
+
+    @IsTest
     static void testConnection_ok() {
         useConfig();
         Test.setMock(HttpCalloutMock.class, new Mock(200, false));
