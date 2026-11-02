@@ -30,6 +30,7 @@
                                 <h2><apex:outputText value="{!denialMessage}" /></h2>
                             </div>
                             <p class="slds-text-body_small slds-m-bottom_medium">
+                                <!-- One outputText with a param: VF drops the space before an inline outputText. -->
                                 <apex:outputText value="You will be signed out in {0} seconds."><apex:param value="{!denialAutoLogoutSeconds}" /></apex:outputText>
                             </p>
                             <a href="/secur/logout.jsp" class="slds-button slds-button_brand">Sign out now</a>
@@ -90,6 +91,7 @@
                                         <apex:repeat value="{!availablePermSets}" var="opt">
                                             <div class="slds-form-element__control">
                                                 <div class="slds-checkbox">
+                                                    <!-- The SLDS label toggles the input only if for= matches VF's generated id. -->
                                                     <apex:inputCheckbox id="chk" value="{!opt.selected}" />
                                                     <label class="slds-checkbox__label" for="{!$Component.chk}">
                                                         <span class="slds-checkbox_faux"></span>

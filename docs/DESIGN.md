@@ -13,14 +13,6 @@ A Salesforce Login Flow is a Visualforce page (or Screen Flow) that Salesforce i
 - Salesforce expects the controller to call **`Auth.SessionManagement.finishLoginFlow()`** to complete the flow. The returned `PageReference` routes the user to the right destination, including the session handoff from `login.salesforce.com` to My Domain. Manual redirects don't trigger that handoff.
 - The `retURL` parameter is **not a safe destination**. It can point to a nested `contentDoor` URL that resolves back to `/apex/LoginFlowPermSets`, creating a loop.
 
-**Dead ends already ruled out:**
-- Redirecting to `startURL`: usually blank in this flow.
-- Redirecting to `retURL`: creates the loop above.
-- Building `frontdoor.jsp?sid=...&retURL=...` by hand: reprompts for password, because the session isn't fully established yet.
-- `URL.getOrgDomainUrl().toExternalForm() + '/home/home.jsp'`: lands on the org with the wrong session cookie ("To access this page, first finish logging in").
-
-Only `finishLoginFlow()` handles all of this.
-
 ---
 
 ## Authentication: Falcon OAuth2 client credentials
@@ -36,8 +28,6 @@ Salesforce handles the token entirely:
 ### Why the credentials are in their own package directory
 
 The access and token hosts differ per Falcon cloud. If the Named Credential and External Credential lived in `force-app`, every routine `sf project deploy start --source-dir force-app` would reset a non-US-1 org back to US-1 hosts. `sgnl-credentials/` is a separate, non-default package directory with US-1 defaults. It's deployed on first install or a cloud change; the bootstrap script patches the hosts into a temporary copy before deploying.
-
-An earlier version tried to handle this with a `.forceignore` entry plus an in-place patch. Combined, those meant the patched Named Credential never deployed at all.
 
 ### What the token does and doesn't prove
 
@@ -59,9 +49,9 @@ Both calls are `POST /v1/providers` with `context: { org, routingKey }`. `org` i
 
 `/v1/providers` is a single URL, so the request body has to tell SGNL which route to use. Each integration assignment matches one value read from one JSON path, carries one route, and its application Id must be unique within the provider hook. Each org needs two routes, so it needs two assignments and two distinct values. Matching on the plain Org Id would give one route per org, and matching on a bare `search`/`evaluate` field would give one org per provider hook. So the matched value has to combine both: `<orgid>_search` / `<orgid>_evaluate`.
 
-That value lives in its own key, `routingKey`, so `org` stays the real Org Id. An earlier version packed the suffix into `org` itself, so policies and logs saw `00D..._evaluate` instead of the org.
+That value lives in its own key, `routingKey`, so `org` stays the real Org Id in policies and logs.
 
-The suffix is hidden from admins. `LoginFlowConfig` always derives both routing keys from the running org; there is no override. The admin page and the bootstrap script print the application Id path and the exact application Ids for the SGNL side. An earlier version had Org Id override fields on the config record; they were removed because the only thing an override could do was disagree with the provider hook, and a sandbox refresh copies config records, so a production override would have pointed a refreshed sandbox at production's Protected System.
+The suffix is hidden from admins. `LoginFlowConfig` always derives both routing keys from the running org; there is no override. The admin page and the bootstrap script print the application Id path and the exact application Ids for the SGNL side. An override could only disagree with the provider hook, and a sandbox refresh copies config records, so a production override would point a refreshed sandbox at production's Protected System.
 
 The list response (`{ "decision": "allow", "permissionSetIds": [...] }`) is not an SGNL type. It comes from a custom transform template on the tenant's search route, which returns at most 1000 results and doesn't paginate. The evaluate response (`assumePermissionSet` and pre-login) is SGNL's `AccessEvaluationResponse`: `decisions[]` plus `principalId`, with `action` and `assetId` optional on each decision. `SgnlClient` deserializes both into typed classes; fields it doesn't model are ignored, and a type mismatch is wrapped as `SgnlException`.
 
@@ -69,7 +59,7 @@ The list response (`{ "decision": "allow", "permissionSetIds": [...] }`) is not 
 
 `SgnlClient.allAllowed()` returns true only if:
 
-- there is exactly one decision per query (an earlier version accepted fewer decisions than queries, so one Allow could activate two permission sets);
+- there is exactly one decision per query, so one Allow can't activate two permission sets;
 - every `decision` is `Allow`, compared case-insensitively;
 - any `action` or `assetId` a decision echoes back matches the query at the same index. Asset ids compare as `Id`, so 15- and 18-character forms match.
 
@@ -108,18 +98,6 @@ Failures are logged with `System.debug(LoggingLevel.ERROR, 'SGNL login flow <ste
 
 The session sits in Login-Flow limbo for the redirect window (default 10 seconds, max 600). The denied state renders no form, and `activate()`/`skip()` return immediately when `denied` is set, so there's no way to complete the flow from that state.
 
-### Why the meta refresh is in `<body>`
-
-VF doesn't give clean access to `<head>` from an `<apex:outputPanel rendered="{!denied}">`. Browsers honor the tag in `<body>`; the JavaScript timer is the safety net.
-
-### The "in10 seconds" typo
-
-VF drops the whitespace before an `<apex:outputText>`, even on the same line, so `You will be signed out in <apex:outputText value="{!denialAutoLogoutSeconds}" /> seconds.` renders as `signed out in10 seconds`. The page renders the whole sentence in one `outputText` with a parameter instead, so there's no whitespace between tags to lose:
-
-```html
-<apex:outputText value="You will be signed out in {0} seconds."><apex:param value="{!denialAutoLogoutSeconds}" /></apex:outputText>
-```
-
 ---
 
 ## Configuration: optional CMT overrides with derived defaults
@@ -130,9 +108,7 @@ Every field is optional. The pre-login check defaults to off, the action to `log
 
 The routing keys are not configurable: they're always `UserInfo.getOrganizationId().left(15)` plus `_search` / `_evaluate`. A fresh org works with no record, and a sandbox refresh can't carry production's routing values over. See "Why there's a separate routing key" above.
 
-An earlier version's fallbacks were a specific tenant's org id and hosts, which would have made a new customer org call SGNL with another org's context. There are no tenant values in code now.
-
-The Named Credential name and API path are constants in `SgnlClient`, not configuration. Making them configurable let anyone who could edit the config point the login flow at a different Named Credential.
+The Named Credential name and API path are constants in `SgnlClient`, not configuration, so anyone who can edit the config can't point the login flow at a different Named Credential.
 
 ### Why CMT and not Custom Settings
 
@@ -142,13 +118,13 @@ The Named Credential name and API path are constants in `SgnlClient`, not config
 
 ### Why there is no in-app save
 
-An earlier version saved from the LWC through `Metadata.Operations.enqueueDeployment`, which needs **Modify Metadata** (close to full admin) on the admin permission set and is awkward from a managed package. Admins now edit the record in Setup's native Custom Metadata UI, which needs **Customize Application**, gives the audit trail for free, and needs no extra grants. The admin page is read-only, shows the effective values, and links to Setup.
+Saving from the LWC would need `Metadata.Operations.enqueueDeployment`, which needs **Modify Metadata** (close to full admin) on the admin permission set and is awkward from a managed package. Admins edit the record in Setup's native Custom Metadata UI instead, which needs **Customize Application**, gives the audit trail for free, and needs no extra grants. The admin page is read-only, shows the effective values, and links to Setup.
 
 ### Seeding the record
 
 The bootstrap script writes a `customMetadata/LoginFlow_Config.Default.md-meta.xml` into its temporary copy of the project, only when the operator enables the pre-login check. The file declares the `xsi`/`xsd` namespaces and types each value (`xsd:boolean`, `xsd:string`). Fields omitted from the file are left unchanged on update, so it doesn't overwrite other edits made in Setup.
 
-Don't commit a CMT record to source: it would overwrite Setup edits on every deploy. An earlier hand-written record also failed with an opaque `UNKNOWN_EXCEPTION`, probably from missing namespaces or value types. If you need a committed record, create it in Setup and retrieve it with `sf project retrieve start --metadata CustomMetadata:LoginFlow_Config.Default`.
+Don't commit a CMT record to source: it would overwrite Setup edits on every deploy. If you need a committed record, create it in Setup and retrieve it with `sf project retrieve start --metadata CustomMetadata:LoginFlow_Config.Default`.
 
 ---
 
@@ -178,7 +154,7 @@ So the assignment query, the existing-activation query and the insert run in sys
 
 A login flow runs in a child session, and inserting against a child session throws `FIELD_INTEGRITY_EXCEPTION, Session permission set cannot be activated for a child session`. The controller uses `Auth.SessionManagement.getCurrentSession()` and takes `ParentId`, or `SessionId` when there's no parent, the same pattern Salesforce's own example uses. Inside a VF Login Flow, the current session is a `Visualforce` session whose parent is the root `UI` session.
 
-An earlier version queried the user's most recent root `AuthSession`. With concurrent sessions (another browser or device), that could activate permission sets on the wrong session. There is no fallback to that query.
+There is no fallback to the user's most recent root `AuthSession`: with concurrent sessions (another browser or device), that could activate permission sets on the wrong session.
 
 ### Duplicates throw `DUPLICATE_VALUE`
 
@@ -198,35 +174,9 @@ Salesforce lets a user activate their own assigned session permission sets with 
 
 ---
 
-## Visualforce view state and controller lifecycle
-
-### Why the config is resolved in the constructor
-
-The constructor sets `denialAutoLogoutSeconds`, which the page reads on every render, including postbacks where `init()` doesn't run.
-
-### Offered ids are pinned in view state
+## Offered ids are pinned in view state
 
 `init()` records the ids it offered in a private `offeredIds` set, and `PermSetOption.psId` has a private setter. `activate()` rejects any selection not in `offeredIds`. View state is encrypted and signed by Salesforce, so this is belt-and-braces against a tampered postback.
-
-### Why "Continue without activating" has `immediate="true"`
-
-`immediate="true"` skips value binding on postback, so the skip action runs even if the checkbox state is bad. "Accept and Continue" needs the checkbox state, so it omits `immediate`.
-
----
-
-## SLDS checkbox pattern: the `id`/`for` link
-
-SLDS hides the real `<input>` and uses a `<label>` with `<span class="slds-checkbox_faux">` as the click target. The label only toggles the input if its `for` matches the input's id. VF mangles ids (`j_id0:j_id2:0:chk`), so the page uses `$Component`:
-
-```html
-<apex:inputCheckbox id="chk" value="{!opt.selected}" />
-<label for="{!$Component.chk}" class="slds-checkbox__label">
-    <span class="slds-checkbox_faux"></span>
-    ...
-</label>
-```
-
-Without it, clicking the visible checkbox does nothing.
 
 ---
 
@@ -235,10 +185,6 @@ Without it, clicking the visible checkbox does nothing.
 - Read-only: effective values (with defaults applied), whether a `Default` record exists, and an **Edit in Setup** link.
 - **Test Connection** fires a live `listPermissionSets` call as the admin. It never throws: callout failures (including token-fetch failures) return `statusCode: 0` with the exception text and a hint; 401/403 get a hint about the API client's scope and provider mapping. It tests the saved configuration, not anything typed on the page.
 - The admin needs External Credential principal access because Test Connection calls out as them; `NGIS_SGNL_Login_Flow_Admin` grants it along with the app and tab.
-
-### Tab visibility trap
-
-A newly deployed `CustomTab` is hidden from every profile until a profile or permission set grants it. It then doesn't appear in App Launcher, the App Manager navigation picker, or `TabDefinition`. `SELECT Id FROM TabDefinition WHERE Name='Login_Flow_Admin'` returning zero rows means visibility is the problem. `NGIS_SGNL_Login_Flow_Admin` grants the tab and the app.
 
 ---
 
@@ -269,6 +215,6 @@ The `HttpCalloutMock` tests cover request shape, every SGNL failure mode, decisi
 - A successful `SessionPermSetActivation` insert: no `AuthSession` can exist in `@IsTest`.
 - `getCurrentSession()`: throws "Current session unavailable" in tests, hence `sessionIdOverride`.
 - `finishLoginFlow()`: returns null outside a real login flow, so tests assert on controller state, not redirects.
-- The VF render, the LWC (no Jest setup yet) and the real token exchange.
+- The VF render, the LWC and the real token exchange.
 
 Verify these in a sandbox with the Login Flow assigned to a test profile.
