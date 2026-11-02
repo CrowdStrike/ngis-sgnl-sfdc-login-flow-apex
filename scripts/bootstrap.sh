@@ -82,13 +82,18 @@ EOF
 # -----------------------------------------------------------------------------
 heading "Target org"
 
-prompt "Salesforce CLI org alias: "
-read -r ORG_ALIAS
-[[ -z "$ORG_ALIAS" ]] && die "Org alias is required."
-
-info "Checking authentication for '$ORG_ALIAS'..."
-IDENTITY_JSON="$(sf org display user --target-org "$ORG_ALIAS" --json 2>/dev/null)" \
-  || die "Not authenticated. Run: sf org login web --alias $ORG_ALIAS"
+IDENTITY_JSON=""
+while [[ -z "$IDENTITY_JSON" ]]; do
+  prompt "Salesforce CLI org alias: "
+  read -r ORG_ALIAS
+  if [[ -z "$ORG_ALIAS" ]]; then
+    fail "Org alias is required."
+    continue
+  fi
+  info "Checking authentication for '$ORG_ALIAS'..."
+  IDENTITY_JSON="$(sf org display user --target-org "$ORG_ALIAS" --json 2>/dev/null)" \
+    || { IDENTITY_JSON=""; fail "Not authenticated as '$ORG_ALIAS'. Check the alias with 'sf org list', or log in with: sf org login web --alias $ORG_ALIAS"; }
+done
 RUNNING_USER_ID="$(echo "$IDENTITY_JSON" | jq -r '.result.id')"
 RUNNING_USER_NAME="$(echo "$IDENTITY_JSON" | jq -r '.result.username')"
 ok "Authenticated as $RUNNING_USER_NAME"
@@ -101,23 +106,29 @@ cat <<EOF
   3) EU-1   access.eu-1.crowdstrike.com
   4) Other  enter an access host
 EOF
-prompt "Falcon cloud [1]: "
-read -r CLOUD_CHOICE
-case "${CLOUD_CHOICE:-1}" in
-  1) ACCESS_HOST="access.crowdstrike.com" ;;
-  2) ACCESS_HOST="access.us-2.crowdstrike.com" ;;
-  3) ACCESS_HOST="access.eu-1.crowdstrike.com" ;;
-  4)
-    prompt "Access host (e.g. access.<cloud>.crowdstrike.com): "
-    read -r ACCESS_HOST
-    ACCESS_HOST="${ACCESS_HOST#https://}"
-    ACCESS_HOST="${ACCESS_HOST%/}"
-    ACCESS_HOST="$(printf '%s' "$ACCESS_HOST" | tr '[:upper:]' '[:lower:]')"
-    ;;
-  *) die "Invalid choice '$CLOUD_CHOICE'." ;;
-esac
-[[ "$ACCESS_HOST" =~ $ACCESS_HOST_PATTERN ]] \
-  || die "Invalid access host '$ACCESS_HOST'. Expected access.crowdstrike.com or access.<cloud>.crowdstrike.com."
+# Invalid answers ask again rather than exiting.
+ACCESS_HOST=""
+while [[ -z "$ACCESS_HOST" ]]; do
+  prompt "Falcon cloud [1]: "
+  read -r CLOUD_CHOICE
+  case "${CLOUD_CHOICE:-1}" in
+    1) ACCESS_HOST="access.crowdstrike.com" ;;
+    2) ACCESS_HOST="access.us-2.crowdstrike.com" ;;
+    3) ACCESS_HOST="access.eu-1.crowdstrike.com" ;;
+    4)
+      prompt "Access host (e.g. access.<cloud>.crowdstrike.com): "
+      read -r ACCESS_HOST
+      ACCESS_HOST="${ACCESS_HOST#https://}"
+      ACCESS_HOST="${ACCESS_HOST%/}"
+      ACCESS_HOST="$(printf '%s' "$ACCESS_HOST" | tr '[:upper:]' '[:lower:]')"
+      if [[ ! "$ACCESS_HOST" =~ $ACCESS_HOST_PATTERN ]]; then
+        fail "Invalid access host '$ACCESS_HOST'. Expected access.crowdstrike.com or access.<cloud>.crowdstrike.com."
+        ACCESS_HOST=""
+      fi
+      ;;
+    *) fail "Invalid choice '$CLOUD_CHOICE'. Enter 1, 2, 3 or 4." ;;
+  esac
+done
 TOKEN_HOST="api.${ACCESS_HOST#access.}"
 info "API endpoint:   https://$ACCESS_HOST"
 info "Token endpoint: https://$TOKEN_HOST/oauth2/token"
@@ -139,17 +150,52 @@ prompt "Falcon client id (leave blank to set credentials later in Setup): "
 read -r CLIENT_ID
 CLIENT_SECRET=""
 if [[ -n "$CLIENT_ID" ]]; then
-  prompt "Falcon client secret: "
-  read -rs CLIENT_SECRET
-  echo
-  [[ -z "$CLIENT_SECRET" ]] && die "Client secret is required when a client id is given."
+  while [[ -z "$CLIENT_SECRET" ]]; do
+    prompt "Falcon client secret: "
+    read -rs CLIENT_SECRET
+    echo
+    [[ -z "$CLIENT_SECRET" ]] && fail "Client secret is required when a client id is given."
+  done
 fi
 
 heading "Login Flow assignment"
 
-prompt "Profile whose users will go through the Login Flow (e.g. Standard User): "
-read -r PROFILE_NAME
-[[ -z "$PROFILE_NAME" ]] && die "Profile name is required."
+cat <<EOF
+Choose the profile whose users should see the SGNL permission set picker at
+login. Its active users get the $USER_PERMSET permission set now, and
+you attach the Login Flow to this profile at the end. Don't choose the
+profile your own admin account uses.
+
+Profiles with active users:
+EOF
+# "Name<TAB>count" per profile; a failed query just means no list.
+mapfile -t PROFILE_ROWS < <(sf data query --target-org "$ORG_ALIAS" \
+  --query "SELECT Profile.Name, COUNT(Id) FROM User WHERE IsActive = true GROUP BY Profile.Name ORDER BY Profile.Name" \
+  --json 2>/dev/null | jq -r '.result.records[]? | select(.Name != null) | "\(.Name)\t\(.expr0)"' || true)
+for i in "${!PROFILE_ROWS[@]}"; do
+  printf '  %2d) %s (%s active)\n' "$((i + 1))" "${PROFILE_ROWS[$i]%%$'\t'*}" "${PROFILE_ROWS[$i]##*$'\t'}"
+done
+echo
+
+# Look up the profile right away, before changing anything, so a typo can be
+# fixed here.
+PROFILE_ID=""
+while [[ -z "$PROFILE_ID" ]]; do
+  prompt "Profile number or name: "
+  read -r PROFILE_NAME
+  if [[ "$PROFILE_NAME" =~ ^[0-9]+$ ]] && (( PROFILE_NAME >= 1 && PROFILE_NAME <= ${#PROFILE_ROWS[@]} )); then
+    PROFILE_NAME="${PROFILE_ROWS[$((PROFILE_NAME - 1))]%%$'\t'*}"
+  fi
+  if [[ -z "$PROFILE_NAME" ]]; then
+    fail "Profile is required."
+    continue
+  fi
+  PROFILE_ID="$(sf data query \
+    --target-org "$ORG_ALIAS" \
+    --query "SELECT Id FROM Profile WHERE Name='$(soql_escape "$PROFILE_NAME")' LIMIT 1" \
+    --json 2>/dev/null | jq -r '.result.records[0].Id // empty' || true)"
+  [[ -z "$PROFILE_ID" ]] && fail "Profile '$PROFILE_NAME' not found. Use the profile's name as shown in Setup → Profiles."
+done
 
 heading "Pre-login evaluation"
 
@@ -159,15 +205,17 @@ PRELOGIN_ENABLED=false
 PRELOGIN_ACTION=login
 if [[ "$PRELOGIN_ANSWER" =~ ^[Yy]$ ]]; then
   PRELOGIN_ENABLED=true
-  prompt "Pre-login action name [default: login]: "
-  read -r PRELOGIN_ACTION
-  PRELOGIN_ACTION="${PRELOGIN_ACTION:-login}"
-  [[ "$PRELOGIN_ACTION" =~ ^[A-Za-z0-9_.:-]+$ ]] \
-    || die "Pre-login action may only contain letters, digits, '_', '.', ':' and '-'."
+  while true; do
+    prompt "Pre-login action name [default: login]: "
+    read -r PRELOGIN_ACTION
+    PRELOGIN_ACTION="${PRELOGIN_ACTION:-login}"
+    [[ "$PRELOGIN_ACTION" =~ ^[A-Za-z0-9_.:-]+$ ]] && break
+    fail "Pre-login action may only contain letters, digits, '_', '.', ':' and '-'."
+  done
 fi
 
 # -----------------------------------------------------------------------------
-# Look up the profile before changing anything
+# Look up the Org Id before changing anything
 # -----------------------------------------------------------------------------
 PROFILE_ID="$(sf data query \
   --target-org "$ORG_ALIAS" \

@@ -87,7 +87,7 @@ It prompts for:
 1. **Org alias**: the `sf` alias you authenticated
 2. **Falcon cloud**: US-1, US-2 or EU-1, or another `access.<cloud>.crowdstrike.com` host. The token host `api.<cloud>.crowdstrike.com` is derived from it. One cloud per org.
 3. **Falcon client id and secret**: optional; leave blank to set them in Setup later. The script first lists what the API client needs: the `sgnl-access:read` scope, one client per org, and a mapping to your SGNL provider.
-4. **Profile name**: the profile whose users should go through the login flow
+4. **Profile**: chosen by number or name from a list of profiles with active users. Choose the profile whose users should see the permission set picker, not the one your admin account uses.
 5. **Pre-login check**: optional
 
 Then it deploys `force-app` and `sgnl-credentials`, creates the `LoginFlow_Config.Default` record with every setting filled in (see [Configuration](#configuration)), sets the client id and secret on the `NGIS_SGNL_Principal` principal, assigns `NGIS_SGNL_Login_Flow_Admin` to you and `NGIS_SGNL_Login_Flow_User` to every active user on the profile, and prints the two SGNL provider hook application Ids for this org. If you supplied credentials, it then offers to run Test Connection and shows the result. It also prints the Setup steps to attach the Login Flow to the profile, which is manual. Attach it only after Test Connection succeeds.
