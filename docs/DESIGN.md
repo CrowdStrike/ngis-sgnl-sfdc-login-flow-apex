@@ -114,7 +114,11 @@ VF doesn't give clean access to `<head>` from an `<apex:outputPanel rendered="{!
 
 ### The "in10 seconds" typo
 
-VF strips inter-tag whitespace, so a label and an `<apex:outputText>` on separate lines render as `signed out in10 seconds`. Keep `You will be signed out in <apex:outputText value="{!denialAutoLogoutSeconds}" /> seconds.` on one line.
+VF drops the whitespace before an `<apex:outputText>`, even on the same line, so `You will be signed out in <apex:outputText value="{!denialAutoLogoutSeconds}" /> seconds.` renders as `signed out in10 seconds`. The page renders the whole sentence in one `outputText` with a parameter instead, so there's no whitespace between tags to lose:
+
+```html
+<apex:outputText value="You will be signed out in {0} seconds."><apex:param value="{!denialAutoLogoutSeconds}" /></apex:outputText>
+```
 
 ---
 
@@ -172,13 +176,17 @@ So the assignment query, the existing-activation query and the insert run in sys
 
 ### The AuthSession must be the root session
 
-A login flow runs in a child session, and inserting against a child session throws `FIELD_INTEGRITY_EXCEPTION, Session permission set cannot be activated for a child session`. The controller uses `Auth.SessionManagement.getCurrentSession()` and takes `ParentId`, or `SessionId` when there's no parent, the same pattern Salesforce's own example uses.
+A login flow runs in a child session, and inserting against a child session throws `FIELD_INTEGRITY_EXCEPTION, Session permission set cannot be activated for a child session`. The controller uses `Auth.SessionManagement.getCurrentSession()` and takes `ParentId`, or `SessionId` when there's no parent, the same pattern Salesforce's own example uses. Inside a VF Login Flow, the current session is a `Visualforce` session whose parent is the root `UI` session.
 
 An earlier version queried the user's most recent root `AuthSession`. With concurrent sessions (another browser or device), that could activate permission sets on the wrong session. There is no fallback to that query.
 
 ### Duplicates throw `DUPLICATE_VALUE`
 
 If the user re-runs the flow, previously activated sets are still on the session, and inserting them again fails. The controller queries existing activations for the session and skips them. `SessionPermSetActivation` isn't upsertable.
+
+### Cleanup is asynchronous
+
+An activation applies only to its session, but Salesforce deletes the `SessionPermSetActivation` record asynchronously, some time after the session ends. A leftover record doesn't mean the session is still alive; check `AuthSession`.
 
 ### Callouts before DML
 
@@ -234,12 +242,20 @@ A newly deployed `CustomTab` is hidden from every profile until a profile or per
 
 ---
 
+## Flow user access
+
+### Users added to the profile later are locked out
+
+The Login Flow is attached per profile, but the profile's Login Flow setting only names the VF page; it grants nothing. Access to the `LoginFlowPermSets` page, the controller classes and the External Credential principal all come from `NGIS_SGNL_Login_Flow_User`. A user on the profile without that permission set gets Insufficient Privileges right after authenticating and can't log in, with the pre-login check on or off. The bootstrap script assigns the permission set to the profile's active users when it runs, so anyone added to the profile afterwards is locked out until an admin assigns it.
+
+---
+
 ## Bootstrap script design
 
 - **Never touches the working tree.** It copies the project into `mktemp -d`, patches the hosts and optional CMT record there, and deploys from the copy.
 - **Hosts are allowlisted.** The access host must match `^access\.([a-z0-9-]+\.)*crowdstrike\.(com|red|black)$` (the same check as the CrowdStrike GitHub policy action); the token host is `api.` plus the rest. Validated hosts are safe to substitute with `sed`.
 - **The secret never appears on a command line.** It's read with `read -rs`, passed to `jq` through the environment, written to a mode-600 file (`umask 077`), and sent with `sf api request rest --body @file`. POST creates the principal's credentials; PUT updates them on re-runs.
-- **Lockout ordering.** The script never attaches the Login Flow. `LoginFlow` isn't available through the REST or Tooling API ("sObject type 'LoginFlow' is not supported"), so attaching it is a Setup step the script prints last, after the user permission set is assigned and after Test Connection. If the assignment fails, the script stops and says not to attach the flow.
+- **Lockout ordering.** The script never attaches the Login Flow. It prints the Setup steps to attach it last, after the user permission set is assigned and after Test Connection. If the assignment fails, the script stops and says not to attach the flow. To attach it by deployment instead, use the profile's `loginFlows` metadata (`LoginFlow` isn't available through the REST or Tooling API). A Profile deploy changes only the elements in the file, and Profile metadata uses API names, not display names: Standard User is `Standard`.
 - **Paged assignment.** Users are assigned in pages of 5,000, ordered by Id, one anonymous Apex run per page, so large profiles stay under the per-transaction limits (10,000 DML rows, 50,000 query rows). Each page resumes after the previous page's last Id, so users whose assignment keeps failing (for example a license mismatch) can't stall the loop. If a page's result can't be read, the script stops without creating the flow.
 - **Idempotent.** Existing assignments are left alone; credentials are updated.
 - **`jq` is required** for parsing `sf --json` output reliably.
@@ -256,14 +272,3 @@ The `HttpCalloutMock` tests cover request shape, every SGNL failure mode, decisi
 - The VF render, the LWC (no Jest setup yet) and the real token exchange.
 
 Verify these in a sandbox with the Login Flow assigned to a test profile.
-
-### To verify in a sandbox
-
-These are documented behaviors we haven't yet observed end to end:
-
-- Salesforce's token exchange accepts the Falcon token endpoint's HTTP 201 response.
-- How a token-fetch failure surfaces in Apex (exception vs 401).
-- Redeploying the External Credential keeps the principal's stored secret.
-- `getCurrentSession()` returns a `ParentId` inside the VF login flow, and the insert against it succeeds.
-- The behavior of `activateSessionPermSet` for an API-enabled standard user (for the threat model).
-- The bootstrap script's generated CMT record deploys cleanly.

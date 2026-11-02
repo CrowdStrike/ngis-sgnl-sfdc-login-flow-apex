@@ -30,7 +30,7 @@
                                 <h2><apex:outputText value="{!denialMessage}" /></h2>
                             </div>
                             <p class="slds-text-body_small slds-m-bottom_medium">
-                                You will be signed out in <apex:outputText value="{!denialAutoLogoutSeconds}" /> seconds.
+                                <apex:outputText value="You will be signed out in {0} seconds."><apex:param value="{!denialAutoLogoutSeconds}" /></apex:outputText>
                             </p>
                             <a href="/secur/logout.jsp" class="slds-button slds-button_brand">Sign out now</a>
                         </div>
