@@ -3,6 +3,7 @@
     <fullName>Pre_Login_Action__c</fullName>
     <label>Pre-Login Action</label>
     <description>SGNL action name to evaluate before login proceeds. Defaults to "login".</description>
+    <inlineHelpText>SGNL action evaluated before the permission set page. Leave blank to use "login".</inlineHelpText>
     <type>Text</type>
     <length>255</length>
     <required>false</required>

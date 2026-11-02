@@ -13,10 +13,10 @@
             <template lwc:elseif={cfg}>
 
                 <template lwc:if={cfg.hasConfigRecord}>
-                    <p class="slds-m-bottom_small">Values below include overrides from the <strong>Default</strong> Login Flow Config record.</p>
+                    <p class="slds-m-bottom_small">Values below are saved on the <strong>Default</strong> Login Flow Config record. Fields left blank on the record show the default the login flow uses.</p>
                 </template>
                 <template lwc:else>
-                    <p class="slds-m-bottom_small">No <strong>Default</strong> Login Flow Config record exists, so built-in defaults are in use.</p>
+                    <p class="slds-m-bottom_small">No <strong>Default</strong> Login Flow Config record exists, so built-in defaults are in use. To override them, use <strong>Create in Setup</strong> and name the record <strong>Default</strong>.</p>
                 </template>
 
                 <h3 class="slds-text-heading_small slds-m-top_small slds-m-bottom_x-small">Connection</h3>
@@ -41,11 +41,20 @@
                     <dt class="slds-item_label slds-text-color_weak">Status</dt>
                     <dd class="slds-item_detail">{preLoginLabel}</dd>
                     <dt class="slds-item_label slds-text-color_weak">Action</dt>
-                    <dd class="slds-item_detail">{cfg.preLoginAction}</dd>
+                    <dd class="slds-item_detail">
+                        <template lwc:if={cfg.preLoginActionIsDefault}>Not set (default: {cfg.preLoginAction})</template>
+                        <template lwc:else>{cfg.preLoginAction}</template>
+                    </dd>
                     <dt class="slds-item_label slds-text-color_weak">Denial Message</dt>
-                    <dd class="slds-item_detail">{cfg.denialMessage}</dd>
+                    <dd class="slds-item_detail">
+                        <template lwc:if={cfg.denialMessageIsDefault}>Not set (default: {cfg.denialMessage})</template>
+                        <template lwc:else>{cfg.denialMessage}</template>
+                    </dd>
                     <dt class="slds-item_label slds-text-color_weak">Auto-Logout Seconds</dt>
-                    <dd class="slds-item_detail">{cfg.denialAutoLogoutSecs}</dd>
+                    <dd class="slds-item_detail">
+                        <template lwc:if={cfg.denialAutoLogoutSecsIsDefault}>Not set (default: {cfg.denialAutoLogoutSecs})</template>
+                        <template lwc:else>{cfg.denialAutoLogoutSecs}</template>
+                    </dd>
                 </dl>
 
                 <div class="slds-m-top_medium">
@@ -57,7 +66,7 @@
                     </lightning-button>
                     <a class="slds-button slds-button_neutral slds-m-left_small"
                        href={cfg.setupUrl}
-                       target="_blank">Edit in Setup</a>
+                       target="_blank">{setupLabel}</a>
                 </div>
 
                 <template lwc:if={testing}>
@@ -79,4 +88,29 @@
             </template>
         </div>
     </lightning-card>
+
+    <template lwc:if={cfg}>
+        <lightning-card title="Setup Checklist" icon-name="standard:task" class="slds-m-top_medium">
+            <div class="slds-p-horizontal_medium">
+                <ol class="slds-list_ordered">
+                    <li class="slds-m-bottom_small">
+                        <strong>Client credentials</strong><span class={credentialBadgeClass}>{credentialLabel}</span>
+                        <p class="slds-text-body_small">Create a Falcon API client with the <code>sgnl-access:read</code> scope, one per Salesforce org, and map it to your SGNL provider. Enter its client id and secret in Setup: Named Credentials, External Credentials, NGIS SGNL Falcon OAuth, Principals, NGIS_SGNL_Principal. <a href={cfg.credentialSetupUrl} target="_blank">Open Named Credentials</a></p>
+                    </li>
+                    <li class="slds-m-bottom_small">
+                        <strong>SGNL provider hook</strong>
+                        <p class="slds-text-body_small">Enter the application Id path and the two application Ids listed under SGNL Provider Hook above.</p>
+                    </li>
+                    <li class="slds-m-bottom_small">
+                        <strong>Test Connection</strong><span class={testBadgeClass}>{testLabel}</span>
+                        <p class="slds-text-body_small">Click Test Connection above. It must pass before you attach the Login Flow.</p>
+                    </li>
+                    <li class="slds-m-bottom_small">
+                        <strong>Attach the Login Flow</strong>
+                        <p class="slds-text-body_small">In Setup, Login Flows, New: Flow Type Visualforce Page, page LoginFlowPermSets, then assign it to the profile. Every user on that profile needs the NGIS SGNL Login Flow User permission set first, or they can't log in. Keep an admin on a profile without the flow. <a href={cfg.loginFlowSetupUrl} target="_blank">Open Login Flows</a></p>
+                    </li>
+                </ol>
+            </div>
+        </lightning-card>
+    </template>
 </template>

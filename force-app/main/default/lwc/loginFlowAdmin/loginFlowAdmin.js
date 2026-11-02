@@ -41,6 +41,36 @@ export default class LoginFlowAdmin extends LightningElement {
         return this.cfg && this.cfg.preLoginCheckEnabled ? 'Enabled' : 'Disabled';
     }
 
+    get setupLabel() {
+        return this.cfg && this.cfg.hasConfigRecord ? 'Edit in Setup' : 'Create in Setup';
+    }
+
+    get credentialLabel() {
+        const status = this.cfg && this.cfg.credentialStatus;
+        if (status === 'Configured') return 'Set';
+        if (status === 'NotConfigured') return 'Not set';
+        return 'Unknown';
+    }
+
+    get credentialBadgeClass() {
+        const status = this.cfg && this.cfg.credentialStatus;
+        return this.badgeClass(status === 'Configured', status === 'NotConfigured');
+    }
+
+    get testLabel() {
+        if (!this.testResult) return 'Not run yet';
+        return `${this.testResult.ok ? 'Passed' : 'Failed'} (HTTP ${this.testResult.statusCode})`;
+    }
+
+    get testBadgeClass() {
+        return this.badgeClass(this.testResult && this.testResult.ok, this.testResult && !this.testResult.ok);
+    }
+
+    badgeClass(good, bad) {
+        const theme = good ? ' slds-theme_success' : bad ? ' slds-theme_error' : '';
+        return `slds-badge slds-m-left_x-small${theme}`;
+    }
+
     get testResultClass() {
         const theme = this.testResult && this.testResult.ok ? 'slds-theme_success' : 'slds-theme_error';
         return `slds-box slds-box_small slds-m-top_medium ${theme}`;

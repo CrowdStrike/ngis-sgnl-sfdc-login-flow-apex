@@ -3,6 +3,7 @@
     <fullName>Pre_Login_Check_Enabled__c</fullName>
     <label>Pre-Login Check Enabled</label>
     <description>When enabled, calls SGNL with Pre_Login_Action before showing the permission set page. If denied, the user is logged out.</description>
+    <inlineHelpText>When checked, SGNL evaluates the pre-login action at every login. On deny or any error the user is signed out. Off by default.</inlineHelpText>
     <type>Checkbox</type>
     <defaultValue>false</defaultValue>
 </CustomField>

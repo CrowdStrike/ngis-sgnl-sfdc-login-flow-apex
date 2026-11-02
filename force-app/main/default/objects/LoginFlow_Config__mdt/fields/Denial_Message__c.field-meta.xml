@@ -3,6 +3,7 @@
     <fullName>Denial_Message__c</fullName>
     <label>Denial Message</label>
     <description>Message shown to the user when the pre-login check is denied, before automatic logout.</description>
+    <inlineHelpText>Shown when the pre-login check denies, before sign-out. Leave blank to use: "Your account is not authorized to access this org right now. You will be signed out automatically."</inlineHelpText>
     <type>LongTextArea</type>
     <length>1024</length>
     <visibleLines>3</visibleLines>

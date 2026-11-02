@@ -43,7 +43,35 @@ private class LoginFlowAdminControllerTest {
         Assert.areEqual('Denied.', dto.denialMessage);
         Assert.areEqual(15, dto.denialAutoLogoutSecs);
         Assert.isFalse(dto.hasConfigRecord);
-        Assert.isTrue(dto.setupUrl.endsWith(LoginFlow_Config__mdt.SObjectType.getDescribe().getKeyPrefix()), dto.setupUrl);
+        Assert.isFalse(dto.preLoginActionIsDefault);
+        Assert.isFalse(dto.denialMessageIsDefault);
+        Assert.isFalse(dto.denialAutoLogoutSecsIsDefault);
+        // Edit page for the org's Default record, or the new-record page if there isn't one
+        LoginFlow_Config__mdt rec = LoginFlow_Config__mdt.getInstance('Default');
+        String target = rec != null ? rec.Id : LoginFlow_Config__mdt.SObjectType.getDescribe().getKeyPrefix();
+        Assert.areEqual(
+            '/lightning/setup/CustomMetadata/page?address=%2F' + target + '%2Fe%3FretURL%3D%252F' + target,
+            dto.setupUrl);
+    }
+
+    @IsTest
+    static void getConfig_reportsCredentialStatusAndSetupLinks() {
+        useConfig();
+        LoginFlowAdminController.credentialStatusOverride = 'NotConfigured';
+
+        LoginFlowAdminController.ConfigDTO dto = LoginFlowAdminController.getConfig();
+
+        Assert.areEqual('NotConfigured', dto.credentialStatus);
+        Assert.areEqual('/lightning/setup/NamedCredential/home', dto.credentialSetupUrl);
+        Assert.areEqual('/lightning/setup/LoginFlow/home', dto.loginFlowSetupUrl);
+    }
+
+    @IsTest
+    static void credentialStatus_neverThrows() {
+        // Whether or not ConnectApi works in a test context, this must not throw
+        String status = LoginFlowAdminController.credentialStatus();
+
+        Assert.isTrue(String.isNotBlank(status), 'Expected a status, got ' + status);
     }
 
     @IsTest

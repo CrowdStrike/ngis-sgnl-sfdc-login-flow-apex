@@ -3,6 +3,7 @@
     <fullName>Denial_Auto_Logout_Seconds__c</fullName>
     <label>Denial Auto Logout Seconds</label>
     <description>Seconds to display the denial message before automatically logging the user out. Defaults to 10.</description>
+    <inlineHelpText>Seconds the denial message shows before sign-out, 1 to 600. Leave blank to use 10.</inlineHelpText>
     <type>Number</type>
     <precision>4</precision>
     <scale>0</scale>

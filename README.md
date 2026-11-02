@@ -16,7 +16,7 @@ Salesforce Screen Flows are the out-of-the-box tool for Login Flows, but they ge
 2. **Fetches available permission sets.** Calls SGNL with `action: listPermissionSets`. SGNL returns the Salesforce Permission Set Ids the user is authorized to assume.
 3. **Filters to what can actually be activated.** Keeps only session-based permission sets (Session Activation Required) that are already assigned to the user, and shows them as a checkbox list.
 4. **Validates the selection.** On submit, calls SGNL again with one `action: assumePermissionSet` query per selected Id. Activation proceeds only if SGNL returns exactly one Allow per query.
-5. **Activates session permissions.** Inserts `SessionPermSetActivation` records against the user's root session. They expire when the session ends.
+5. **Activates session permissions.** Inserts `SessionPermSetActivation` records against the user's root session. They apply to that session only. Salesforce deletes the records some time after the session ends, not right away.
 6. **Completes the login.** Returns the `PageReference` from `Auth.SessionManagement.finishLoginFlow()` so Salesforce routes the user to their destination.
 
 ---
@@ -62,7 +62,7 @@ Salesforce Screen Flows are the out-of-the-box tool for Login Flows, but they ge
 **Salesforce**
 
 - The permission sets you want users to activate must have **Session Activation Required** checked and must be **assigned** to those users. The flow only activates assigned session-based sets.
-- Every user who goes through the flow needs the `NGIS_SGNL_Login_Flow_User` permission set (the bootstrap script assigns it to the chosen profile's active users).
+- Every user who goes through the flow needs the `NGIS_SGNL_Login_Flow_User` permission set. Without it, the user gets **Insufficient Privileges** right after authenticating and can't log in. The bootstrap script assigns it to the profile's active users when it runs; assign it yourself to users added later (see [Rollout](#rollout)).
 
 ---
 
@@ -86,13 +86,13 @@ It prompts for:
 
 1. **Org alias**: the `sf` alias you authenticated
 2. **Falcon cloud**: US-1, US-2 or EU-1, or another `access.<cloud>.crowdstrike.com` host. The token host `api.<cloud>.crowdstrike.com` is derived from it. One cloud per org.
-3. **Falcon client id and secret**: optional; leave blank to set them in Setup later
-4. **Profile name**: the profile whose users should go through the login flow
+3. **Falcon client id and secret**: optional; leave blank to set them in Setup later. The script first lists what the API client needs: the `sgnl-access:read` scope, one client per org, and a mapping to your SGNL provider.
+4. **Profile**: chosen by number or name from a list of profiles with active users. Choose the profile whose users should see the permission set picker, not the one your admin account uses.
 5. **Pre-login check**: optional
 
-Then it deploys `force-app` and `sgnl-credentials`, sets the client id and secret on the `NGIS_SGNL_Principal` principal, assigns `NGIS_SGNL_Login_Flow_Admin` to you and `NGIS_SGNL_Login_Flow_User` to every active user on the profile, and prints the two SGNL provider hook application Ids for this org. It also prints the Setup steps to attach the Login Flow to the profile, which is manual. Attach it only after Test Connection succeeds.
+Then it deploys `force-app` and `sgnl-credentials`, creates the `LoginFlow_Config.Default` record with every setting filled in (see [Configuration](#configuration)), sets the client id and secret on the `NGIS_SGNL_Principal` principal, assigns `NGIS_SGNL_Login_Flow_Admin` to you and `NGIS_SGNL_Login_Flow_User` to every active user on the profile, and prints the two SGNL provider hook application Ids for this org. If you supplied credentials, it then offers to run Test Connection and shows the result. It also prints the Setup steps to attach the Login Flow to the profile, which is manual. Attach it only after Test Connection succeeds.
 
-The script is safe to re-run. Existing assignments are left alone; credentials are updated in place.
+The script is safe to re-run. Existing assignments are left alone; credentials are updated in place; an existing config record is kept unless you choose to overwrite its pre-login fields.
 
 ### Manual deployment
 
@@ -114,9 +114,9 @@ Then, in Setup:
 
 ## Configuration
 
-All settings are optional. With no `LoginFlow_Config.Default` record, the defaults below apply.
+Settings live on the `LoginFlow_Config.Default` record, which the bootstrap script creates with every value filled in. A blank field, or no record at all, uses the default below. The admin page shows those values as "Not set" with the default, and each field's help text in Setup gives its default.
 
-To change a value: **Setup → Custom Metadata Types → Login Flow Config → Manage Records**, then create or edit the record named `Default`. Editing needs the **Customize Application** permission. The admin page has an **Edit in Setup** link.
+To change a value: **Setup → Custom Metadata Types → Login Flow Config → Manage Records**, then create or edit the record named `Default`. Editing needs the **Customize Application** permission. On the admin page, **Edit in Setup** opens the record's edit page, or **Create in Setup** opens a new record when there isn't one yet.
 
 | Field | Default | What it does |
 |-------|---------|--------------|
@@ -129,7 +129,7 @@ The routing keys aren't configurable. They're always the running org's 15-charac
 
 ### Admin page
 
-Open **Continuous Identity Admin** from the App Launcher (requires `NGIS SGNL Login Flow Admin`). It shows the effective configuration, and the application Id path and two application Ids to enter on the SGNL provider hook for this org. Its **Test Connection** button makes a live `listPermissionSets` call as you and shows the raw response and a hint on failure.
+Open **Continuous Identity Admin** from the App Launcher (requires `NGIS SGNL Login Flow Admin`). It shows the saved configuration, and the application Id path and two application Ids to enter on the SGNL provider hook for this org. Its **Test Connection** button makes a live `listPermissionSets` call as you and shows the raw response and a hint on failure. A **Setup Checklist** below shows whether the client credentials are set, what to enter on the SGNL provider hook, the Test Connection result, and how to attach the Login Flow, with links to the Setup pages.
 
 ---
 
@@ -147,7 +147,7 @@ Because errors deny, an SGNL or credential outage locks out every user on the pr
 ## Rollout
 
 - Never attach the Login Flow to the profile of your only administrator until you've tested it with another user.
-- Users added to the profile later need `NGIS SGNL Login Flow User`. Without it the SGNL callout fails; with the pre-login check on, they're denied.
+- **Assign `NGIS SGNL Login Flow User` to users added to the profile later, before they log in.** Without it they get Insufficient Privileges right after authenticating and can't log in at all, with the pre-login check on or off. The profile's Login Flow points at the `LoginFlowPermSets` page but doesn't grant access to it; only the permission set does.
 - Test with a non-admin user on the profile: log out, log back in, and confirm the picker appears and activation works.
 
 ---
@@ -179,6 +179,9 @@ sf project deploy validate --source-dir force-app --source-dir sgnl-credentials 
 **The Login Flow screen never appears**
 - Confirm the Login Flow is assigned to the user's profile, and the VF page is `LoginFlowPermSets`.
 - Make sure the user isn't going through another Login Flow.
+
+**Insufficient Privileges right after login**
+- The user doesn't have `NGIS SGNL Login Flow User`, which grants access to the `LoginFlowPermSets` page. Assign it, then have the user log in again. This usually affects users added to the profile after the bootstrap script ran, and happens with the pre-login check on or off.
 
 **"Unable to load permission sets right now" on the login page, or Test Connection fails with HTTP 0**
 - The callout failed before reaching SGNL. Check the client id and secret on `NGIS_SGNL_Principal`, that the token URL (`api.<cloud>`) and Named Credential URL (`access.<cloud>`) match your Falcon cloud, and that the user has `NGIS SGNL Login Flow User` (or, for Test Connection, `NGIS SGNL Login Flow Admin`).
