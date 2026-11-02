@@ -43,7 +43,9 @@ private class LoginFlowAdminControllerTest {
         Assert.areEqual('Denied.', dto.denialMessage);
         Assert.areEqual(15, dto.denialAutoLogoutSecs);
         Assert.isFalse(dto.hasConfigRecord);
-        Assert.isTrue(dto.setupUrl.endsWith(LoginFlow_Config__mdt.SObjectType.getDescribe().getKeyPrefix()), dto.setupUrl);
+        String typeId = [SELECT DurableId FROM EntityDefinition WHERE QualifiedApiName = 'LoginFlow_Config__mdt'].DurableId;
+        Assert.areEqual('/lightning/setup/CustomMetadata/page?address=%2F' + typeId, dto.setupUrl);
+        Assert.isTrue(typeId.startsWith('01I'), 'Expected the custom object Id, got ' + typeId);
     }
 
     @IsTest

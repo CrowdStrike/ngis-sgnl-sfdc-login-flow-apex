@@ -32,9 +32,26 @@ public with sharing class LoginFlowAdminController {
         dto.denialMessage        = c.denialMessage;
         dto.denialAutoLogoutSecs = c.denialAutoLogoutSecs;
         dto.hasConfigRecord      = c.hasConfigRecord;
-        dto.setupUrl             = '/lightning/setup/CustomMetadata/page?address=%2F'
-            + LoginFlow_Config__mdt.SObjectType.getDescribe().getKeyPrefix();
+        dto.setupUrl             = setupUrl();
         return dto;
+    }
+
+    /**
+     * The Setup detail page for the LoginFlow_Config custom metadata type,
+     * which lists its fields and has Manage Records. Linking to the key
+     * prefix instead lands on the bare record list, which is empty until a
+     * Default record exists.
+     */
+    @TestVisible
+    private static String setupUrl() {
+        List<EntityDefinition> defs = [
+            SELECT DurableId FROM EntityDefinition
+            WHERE QualifiedApiName = 'LoginFlow_Config__mdt' LIMIT 1
+        ];
+        String target = defs.isEmpty()
+            ? LoginFlow_Config__mdt.SObjectType.getDescribe().getKeyPrefix()
+            : defs[0].DurableId;
+        return '/lightning/setup/CustomMetadata/page?address=%2F' + target;
     }
 
     /**
