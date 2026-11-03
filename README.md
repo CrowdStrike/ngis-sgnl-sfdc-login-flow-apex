@@ -32,7 +32,6 @@ Salesforce Screen Flows are the out-of-the-box tool for Login Flows, but they ge
 | `classes/*Test.cls` | Unit tests with `HttpCalloutMock` |
 | `pages/LoginFlowPermSets.page` | SLDS checkbox UI and denial state |
 | `lwc/loginFlowAdmin/` | Admin page: effective config, Test Connection, link to Setup |
-| `permissionsets/NGIS_SGNL_Login_Flow_User` | Required by every user who goes through the flow |
 | `permissionsets/NGIS_SGNL_Login_Flow_Admin` | Admin app/tab and Test Connection |
 | `objects/LoginFlow_Config__mdt/` | Custom Metadata Type for optional settings |
 | `sgnl-credentials/` | Named Credential `NGIS_SGNL_Access` and External Credential `NGIS_SGNL_Falcon_OAuth` (separate package directory, see [Deployment](#deployment)) |
@@ -62,7 +61,7 @@ Salesforce Screen Flows are the out-of-the-box tool for Login Flows, but they ge
 **Salesforce**
 
 - The permission sets you want users to activate must have **Session Activation Required** checked and must be **assigned** to those users. The flow only activates assigned session-based sets.
-- Every user who goes through the flow needs the `NGIS_SGNL_Login_Flow_User` permission set. Without it, the user gets **Insufficient Privileges** right after authenticating and can't log in. The bootstrap script assigns it to the profile's active users when it runs; assign it yourself to users added later (see [Rollout](#rollout)).
+- The profile the Login Flow is attached to needs access to the `LoginFlowPermSets` page, the `LoginFlowConfig`, `LoginFlowController` and `SgnlClient` Apex classes, and the `NGIS_SGNL_Falcon_OAuth - NGIS_SGNL_Principal` External Credential principal. The bootstrap script grants all of these on the profile, so users added to it later are covered. Without page access, users get **Insufficient Privileges** right after authenticating and can't log in.
 
 ---
 
@@ -87,12 +86,12 @@ It prompts for:
 1. **Org alias**: the `sf` alias you authenticated
 2. **Falcon cloud**: US-1, US-2 or EU-1, or another `access.<cloud>.crowdstrike.com` host. The token host `api.<cloud>.crowdstrike.com` is derived from it. One cloud per org.
 3. **Falcon client id and secret**: optional; leave blank to set them in Setup later. The script first lists what the API client needs: the `sgnl-access:read` scope, one client per org, and a mapping to your SGNL provider.
-4. **Profile**: chosen by number or name from a list of profiles with active users. Choose the profile whose users should see the permission set picker, not the one your admin account uses.
+4. **Profiles**: one or more, by number or name, separated by commas (for example `4,5`), from a list of profiles with active users. Choose the profiles whose users should see the permission set picker, not the one your admin account uses.
 5. **Pre-login check**: optional
 
-Then it deploys `force-app` and `sgnl-credentials`, creates the `LoginFlow_Config.Default` record with every setting filled in (see [Configuration](#configuration)), sets the client id and secret on the `NGIS_SGNL_Principal` principal, assigns `NGIS_SGNL_Login_Flow_Admin` to you and `NGIS_SGNL_Login_Flow_User` to every active user on the profile, and prints the two SGNL provider hook application Ids for this org. If you supplied credentials, it then offers to run Test Connection and shows the result. It also prints the Setup steps to attach the Login Flow to the profile, which is manual. Attach it only after Test Connection succeeds.
+Then it deploys `force-app` and `sgnl-credentials`, creates the `LoginFlow_Config.Default` record with every setting filled in (see [Configuration](#configuration)), sets the client id and secret on the `NGIS_SGNL_Principal` principal, assigns `NGIS_SGNL_Login_Flow_Admin` to you, grants each chosen profile access to the flow's page, Apex classes and credential principal, and prints the two SGNL provider hook application Ids for this org. It then offers to run Test Connection, using the credentials saved in the org if you didn't enter any, and shows the result. Next it asks, profile by profile, whether to attach the Login Flow. If Test Connection didn't pass, it warns first: with the pre-login check on, every user on an attached profile is denied until SGNL is reachable. If a profile already has a different Login Flow, it asks before replacing it. It won't use your own profile.
 
-The script is safe to re-run. Existing assignments are left alone; credentials are updated in place; an existing config record is kept unless you choose to overwrite its pre-login fields.
+The script is safe to re-run. Existing grants and assignments are left alone; credentials are updated in place; an existing config record is kept unless you choose to overwrite its pre-login fields. To add the flow to more profiles later, run it again and choose them.
 
 ### Manual deployment
 
@@ -107,8 +106,9 @@ sf project deploy start --source-dir force-app --target-org <org> --wait 30
 Then, in Setup:
 
 1. **Named Credentials → External Credentials → NGIS SGNL Falcon OAuth → Principals → NGIS_SGNL_Principal → Edit**: enter the Falcon client id and secret.
-2. **Permission Sets**: assign `NGIS SGNL Login Flow User` to every user who will go through the flow, and `NGIS SGNL Login Flow Admin` to admins.
-3. **Identity → Login Flows → New**: Flow Type **Visualforce Page**, page `LoginFlowPermSets`, then assign it to the profile.
+2. **Permission Sets**: assign `NGIS SGNL Login Flow Admin` to admins.
+3. **Profiles → the flow's profile**: under **Enabled Visualforce Page Access** add `LoginFlowPermSets`; under **Enabled Apex Class Access** add `LoginFlowConfig`, `LoginFlowController` and `SgnlClient`; under **Enabled External Credential Principal Access** add `NGIS_SGNL_Falcon_OAuth - NGIS_SGNL_Principal`.
+4. **Identity → Login Flows → New**: Flow Type **Visualforce Page**, page `LoginFlowPermSets`, then assign it to the profile. Do this last, after Test Connection succeeds.
 
 ---
 
@@ -147,7 +147,7 @@ Because errors deny, an SGNL or credential outage locks out every user on the pr
 ## Rollout
 
 - Never attach the Login Flow to the profile of your only administrator until you've tested it with another user.
-- **Assign `NGIS SGNL Login Flow User` to users added to the profile later, before they log in.** Without it they get Insufficient Privileges right after authenticating and can't log in at all, with the pre-login check on or off. The profile's Login Flow points at the `LoginFlowPermSets` page but doesn't grant access to it; only the permission set does.
+- Users added to the profile later need nothing extra: the flow's access is on the profile.
 - Test with a non-admin user on the profile: log out, log back in, and confirm the picker appears and activation works.
 
 ---
@@ -181,10 +181,10 @@ sf project deploy validate --source-dir force-app --source-dir sgnl-credentials 
 - Make sure the user isn't going through another Login Flow.
 
 **Insufficient Privileges right after login**
-- The user doesn't have `NGIS SGNL Login Flow User`, which grants access to the `LoginFlowPermSets` page. Assign it, then have the user log in again. This usually affects users added to the profile after the bootstrap script ran, and happens with the pre-login check on or off.
+- The user's profile doesn't have access to the `LoginFlowPermSets` page or the flow's Apex classes. This happens if the Login Flow was attached to a profile the bootstrap script didn't set up. Rerun the script for that profile, or grant the access in Setup (see [Manual deployment](#manual-deployment)), then have the user log in again.
 
 **"Unable to load permission sets right now" on the login page, or Test Connection fails with HTTP 0**
-- The callout failed before reaching SGNL. Check the client id and secret on `NGIS_SGNL_Principal`, that the token URL (`api.<cloud>`) and Named Credential URL (`access.<cloud>`) match your Falcon cloud, and that the user has `NGIS SGNL Login Flow User` (or, for Test Connection, `NGIS SGNL Login Flow Admin`).
+- The callout failed before reaching SGNL. Check the client id and secret on `NGIS_SGNL_Principal`, that the token URL (`api.<cloud>`) and Named Credential URL (`access.<cloud>`) match your Falcon cloud, and that the user's profile has the `NGIS_SGNL_Principal` credential principal access (or, for Test Connection, that you have `NGIS SGNL Login Flow Admin`).
 
 **Test Connection returns HTTP 401 or 403**
 - The authorizer rejected the token. Check the Falcon API client has `sgnl-access:read` and is mapped to your SGNL provider.
