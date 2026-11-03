@@ -98,6 +98,11 @@ done
 RUNNING_USER_ID="$(echo "$IDENTITY_JSON" | jq -r '.result.id')"
 RUNNING_USER_NAME="$(echo "$IDENTITY_JSON" | jq -r '.result.username')"
 ok "Authenticated as $RUNNING_USER_NAME"
+# The operator's own profile is refused below, so the script can't attach the
+# flow where it could lock them out.
+RUNNING_PROFILE_ID="$(sf data query --target-org "$ORG_ALIAS" \
+  --query "SELECT ProfileId FROM User WHERE Id = '$RUNNING_USER_ID'" \
+  --json 2>/dev/null | jq -r '.result.records[0].ProfileId // empty' || true)"
 
 heading "Falcon cloud and OAuth client"
 
@@ -203,6 +208,11 @@ while (( ${#PROFILE_IDS[@]} == 0 )); do
       --json 2>/dev/null | jq -r '.result.records[0].Id // empty' || true)"
     if [[ -z "$CHOICE_ID" ]]; then
       fail "Profile '$choice' not found. Use the number from the list, or the profile's name as shown in Setup → Profiles."
+      CHOICES_OK=false
+      break
+    fi
+    if [[ -n "$RUNNING_PROFILE_ID" && "$CHOICE_ID" == "$RUNNING_PROFILE_ID" ]]; then
+      fail "'$choice' is your own profile. Choose another, or run the script as an admin on a different profile, so a problem with the flow can't lock you out."
       CHOICES_OK=false
       break
     fi
@@ -335,7 +345,7 @@ done
 # asks. On first install the type doesn't exist yet, so a failed query counts
 # as no record.
 CFG_JSON="$(sf data query --target-org "$ORG_ALIAS" \
-  --query "SELECT Pre_Login_Action__c, Denial_Message__c, Denial_Auto_Logout_Seconds__c FROM LoginFlow_Config__mdt WHERE DeveloperName='Default'" \
+  --query "SELECT Pre_Login_Check_Enabled__c, Pre_Login_Action__c, Denial_Message__c, Denial_Auto_Logout_Seconds__c FROM LoginFlow_Config__mdt WHERE DeveloperName='Default'" \
   --json 2>/dev/null || true)"
 EXISTING_CFG="$(jq -r '.result.totalSize // 0' <<<"$CFG_JSON" 2>/dev/null || true)"
 cfg_field() { jq -r ".result.records[0].$1 // empty" <<<"$CFG_JSON" 2>/dev/null || true; }
@@ -358,15 +368,20 @@ cmt_value() {  # field, xsd type, value
 }
 
 if [[ "$EXISTING_CFG" != "1" ]]; then
+  PRELOGIN_EFFECTIVE="$PRELOGIN_ENABLED"
   cmt_value Pre_Login_Check_Enabled__c xsd:boolean "$PRELOGIN_ENABLED"
   cmt_value Pre_Login_Action__c xsd:string "$PRELOGIN_ACTION"
   cmt_value Denial_Message__c xsd:string "$DEFAULT_DENY_MSG"
   cmt_value Denial_Auto_Logout_Seconds__c xsd:double "$DEFAULT_DENY_SECONDS"
 else
+  # jq's // treats false as missing, so a disabled check reads as empty.
+  PRELOGIN_EFFECTIVE=false
+  [[ "$(cfg_field Pre_Login_Check_Enabled__c)" == true ]] && PRELOGIN_EFFECTIVE=true
   if [[ "$PRELOGIN_ENABLED" == true ]]; then
     prompt "A Default config record already exists. Overwrite its pre-login fields? [y/N]: "
     read -r OVERWRITE
     if [[ "$OVERWRITE" =~ ^[Yy]$ ]]; then
+      PRELOGIN_EFFECTIVE=true
       cmt_value Pre_Login_Check_Enabled__c xsd:boolean true
       cmt_value Pre_Login_Action__c xsd:string "$PRELOGIN_ACTION"
     fi
@@ -539,15 +554,16 @@ done
 # Step 5: Test Connection
 # -----------------------------------------------------------------------------
 # Runs the admin page's Test Connection as the running user, who now has the
-# admin permission set and so the credential access. It only passes once the
-# credentials are set and the SGNL provider hook routes this org.
+# admin permission set and so the credential access. It runs even when no
+# client id was entered on this run, so a re-run tests the credentials already
+# saved in the org. It only passes once the credentials are set and the SGNL
+# provider hook routes this org. A failure doesn't stop the script; step 6
+# warns before attaching the Login Flow.
 heading "5. Test Connection"
 
 TEST_PASSED=false
-if [[ -z "$CLIENT_ID" ]]; then
-  warn "Skipping: no client credentials supplied."
-else
-  cat <<EOF
+[[ -z "$CLIENT_ID" ]] && info "No client credentials entered on this run; testing the ones saved in the org, if any."
+cat <<EOF
 Test Connection calls SGNL as you. It passes only after the SGNL provider
 hook has the application Id path {\$.context.routingKey} and two integration
 assignments for this org's Protected System:
@@ -557,36 +573,35 @@ assignments for this org's Protected System:
     $CONTEXT_ORG_EVALUATE
 
 EOF
-  prompt "Run Test Connection now? [Y/n]: "
-  read -r RUN_TEST
-  if [[ "$RUN_TEST" =~ ^[Nn]$ ]]; then
-    info "Skipped. Run Test Connection on the admin page before attaching the Login Flow."
-  else
-    cat > "$WORK_DIR/test_connection.apex" <<'APEX'
+prompt "Run Test Connection now? [Y/n]: "
+read -r RUN_TEST
+if [[ "$RUN_TEST" =~ ^[Nn]$ ]]; then
+  info "Skipped. You can run it later from the admin page."
+else
+  cat > "$WORK_DIR/test_connection.apex" <<'APEX'
 LoginFlowAdminController.TestResultDTO r = LoginFlowAdminController.testConnection();
 System.debug('NGIS_TEST=' + r.statusCode + '/' + r.ok);
 System.debug('NGIS_HINT=' + r.hintText);
 System.debug('NGIS_BODY=' + (r.body == null ? '' : r.body.abbreviate(500)));
 APEX
-    if ! sf apex run --file "$WORK_DIR/test_connection.apex" --target-org "$ORG_ALIAS" \
-        > "$WORK_DIR/test_connection.log" 2>&1; then
-      cat "$WORK_DIR/test_connection.log"
-      warn "Could not run Test Connection. Use the button on the admin page instead."
+  if ! sf apex run --file "$WORK_DIR/test_connection.apex" --target-org "$ORG_ALIAS" \
+      > "$WORK_DIR/test_connection.log" 2>&1; then
+    cat "$WORK_DIR/test_connection.log"
+    warn "Could not run Test Connection. Use the button on the admin page instead."
+  else
+    TEST_RESULT="$(grep -oE 'NGIS_TEST=[0-9]+/(true|false)' "$WORK_DIR/test_connection.log" | head -1 | cut -d= -f2 || true)"
+    TEST_STATUS="${TEST_RESULT%/*}"
+    if [[ "${TEST_RESULT#*/}" == true ]]; then
+      TEST_PASSED=true
+      ok "Test Connection passed (HTTP $TEST_STATUS)."
     else
-      TEST_RESULT="$(grep -oE 'NGIS_TEST=[0-9]+/(true|false)' "$WORK_DIR/test_connection.log" | head -1 | cut -d= -f2 || true)"
-      TEST_STATUS="${TEST_RESULT%/*}"
-      if [[ "${TEST_RESULT#*/}" == true ]]; then
-        TEST_PASSED=true
-        ok "Test Connection passed (HTTP $TEST_STATUS)."
-      else
-        fail "Test Connection failed (HTTP ${TEST_STATUS:-unknown})."
-        # Match the debug output, not the echoed source lines.
-        TEST_HINT="$(grep -oE '\|DEBUG\|NGIS_HINT=.*' "$WORK_DIR/test_connection.log" | head -1 | cut -d= -f2- || true)"
-        TEST_BODY="$(grep -oE '\|DEBUG\|NGIS_BODY=.*' "$WORK_DIR/test_connection.log" | head -1 | cut -d= -f2- || true)"
-        [[ -n "$TEST_HINT" && "$TEST_HINT" != null ]] && warn "$TEST_HINT"
-        [[ -n "$TEST_BODY" ]] && info "Response: $TEST_BODY"
-        warn "Fix this before attaching the Login Flow, then rerun the script or use Test Connection on the admin page."
-      fi
+      fail "Test Connection failed (HTTP ${TEST_STATUS:-unknown})."
+      # Match the debug output, not the echoed source lines.
+      TEST_HINT="$(grep -oE '\|DEBUG\|NGIS_HINT=.*' "$WORK_DIR/test_connection.log" | head -1 | cut -d= -f2- || true)"
+      TEST_BODY="$(grep -oE '\|DEBUG\|NGIS_BODY=.*' "$WORK_DIR/test_connection.log" | head -1 | cut -d= -f2- || true)"
+      [[ -n "$TEST_HINT" && "$TEST_HINT" != null ]] && warn "$TEST_HINT"
+      [[ -n "$TEST_BODY" ]] && info "Response: $TEST_BODY"
+      info "Continuing. Fix this, then rerun the script or use Test Connection on the admin page."
     fi
   fi
 fi
@@ -594,15 +609,25 @@ fi
 # -----------------------------------------------------------------------------
 # Step 6: Attach the Login Flow
 # -----------------------------------------------------------------------------
-# Lockout ordering: attach only to a profile that has all the access, only
-# after Test Connection passed, and only if the operator says so. A profile has
-# at most one Login Flow, which lives in Profile metadata (LoginFlow isn't
+# Lockout ordering: attach only to a profile that has all the access, and only
+# if the operator says so. If Test Connection didn't pass, the operator can
+# still attach, after a warning about what users will see. A profile has at
+# most one Login Flow, which lives in Profile metadata (LoginFlow isn't
 # available through the REST or Tooling API), so read each profile first to
 # see what's there.
 heading "6. Login Flow"
 
 # Comma-separated display names, for the closing steps.
 join_names() { local IFS=,; printf '%s' "$*" | sed 's/,/, /g'; }
+
+if [[ "$TEST_PASSED" != true ]]; then
+  warn "Test Connection didn't pass. You can still attach the Login Flow, but until SGNL is reachable:"
+  if [[ "$PRELOGIN_EFFECTIVE" == true ]]; then
+    warn "  ${c_bold}the pre-login check is on, so every user on an attached profile is denied and signed out.${c_reset}"
+  else
+    warn "  users on an attached profile can still log in, but get no permission sets."
+  fi
+fi
 
 ATTACHED_NAMES=()
 NOT_ATTACHED_NAMES=()
@@ -612,13 +637,7 @@ for i in "${!PROFILE_IDS[@]}"; do
   P_API="${PROFILE_API_NAMES[$i]}"
   if [[ "${PROFILE_ACCESS[$i]}" != true ]]; then
     NO_ACCESS_NAMES+=("$P_NAME")
-    NOT_ATTACHED_NAMES+=("$P_NAME")
     info "Not attaching the Login Flow to '$P_NAME': the profile doesn't have all its access yet."
-    continue
-  fi
-  if [[ "$TEST_PASSED" != true ]]; then
-    NOT_ATTACHED_NAMES+=("$P_NAME")
-    info "Not attaching the Login Flow to '$P_NAME': Test Connection must pass first."
     continue
   fi
 
@@ -627,9 +646,10 @@ for i in "${!PROFILE_IDS[@]}"; do
   if (cd "$STAGE_DIR" && sf project retrieve start --metadata "Profile:$P_API" \
       --target-org "$ORG_ALIAS" --target-metadata-dir "$RETRIEVE_DIR" --unzip) \
       > "$WORK_DIR/profile_retrieve.log" 2>&1; then
-    PROFILE_FILE="$(find "$RETRIEVE_DIR" -name '*.profile' | head -1)"
+    PROFILE_FILE="$(find "$RETRIEVE_DIR" -name '*.profile' 2>/dev/null | head -1 || true)"
     if [[ -n "$PROFILE_FILE" ]] && grep -q '<loginFlows>' "$PROFILE_FILE"; then
-      CURRENT_FLOW_PAGE="$(grep -oE '<vfFlowPage>[^<]*' "$PROFILE_FILE" | head -1 | cut -d'>' -f2)"
+      # A Flow-based Login Flow has no vfFlowPage; grep then finds nothing.
+      CURRENT_FLOW_PAGE="$(grep -oE '<vfFlowPage>[^<]*' "$PROFILE_FILE" | head -1 | cut -d'>' -f2 || true)"
       CURRENT_FLOW_PAGE="${CURRENT_FLOW_PAGE:-(a Flow-based login flow)}"
     fi
   else
@@ -708,11 +728,12 @@ if (( ${#ATTACHED_NAMES[@]} > 0 )); then
   FLOW_STEP+=" The Login Flow is attached to: $(join_names "${ATTACHED_NAMES[@]}").
     "
 fi
+# Profiles missing access are left out here; step 4 says to grant it first.
 if (( ${#NOT_ATTACHED_NAMES[@]} > 0 )); then
-  FLOW_STEP+=" Not attached yet: $(join_names "${NOT_ATTACHED_NAMES[@]}"). Only after Test
-     Connection succeeds, attach it: rerun this script, or Setup → Identity →
-     Login Flows → New. Flow Type \"Visualforce Page\", page $LOGIN_FLOW_PAGE,
-     then assign it to each profile.
+  FLOW_STEP+=" Not attached yet: $(join_names "${NOT_ATTACHED_NAMES[@]}"). To attach it, rerun
+     this script, or Setup → Identity → Login Flows → New. Flow Type
+     \"Visualforce Page\", page $LOGIN_FLOW_PAGE, then assign it to each
+     profile. Run Test Connection first.
     "
 fi
 FLOW_STEP+=" Keep an admin on a profile without the flow."
@@ -724,8 +745,8 @@ if (( ${#NO_ACCESS_NAMES[@]} == 0 )); then
 else
   ACCESS_STEP="  4. ${c_bold}No credential access yet: $(join_names "${NO_ACCESS_NAMES[@]}").${c_reset} Grant it in
      Setup → Profiles → (profile) → Enabled External Credential Principal
-     Access, or rerun this script. Without it the flow can't call SGNL for
-     those profiles' users."
+     Access, or rerun this script. Don't attach the Login Flow to these
+     profiles until then: the flow can't call SGNL for their users."
 fi
 
 cat <<EOF
