@@ -107,7 +107,7 @@
                     </li>
                     <li class="slds-m-bottom_small">
                         <strong>Attach the Login Flow</strong>
-                        <p class="slds-text-body_small">In Setup, Login Flows, New: Flow Type Visualforce Page, page LoginFlowPermSets, then assign it to the profile. Every user on that profile needs the NGIS SGNL Login Flow User permission set first, or they can't log in. Keep an admin on a profile without the flow. <a href={cfg.loginFlowSetupUrl} target="_blank">Open Login Flows</a></p>
+                        <p class="slds-text-body_small">In Setup, Login Flows, New: Flow Type Visualforce Page, page LoginFlowPermSets, then assign it to the profile. The bootstrap script can do this for you. The profile must have access to the LoginFlowPermSets page, its Apex classes and the NGIS_SGNL_Principal credential principal first, or its users can't log in; the bootstrap script grants these. Keep an admin on a profile without the flow. <a href={cfg.loginFlowSetupUrl} target="_blank">Open Login Flows</a></p>
                     </li>
                 </ol>
             </div>

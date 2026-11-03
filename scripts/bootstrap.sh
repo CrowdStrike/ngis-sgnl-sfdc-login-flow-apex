@@ -5,9 +5,9 @@
 # Prompts for the Falcon cloud and OAuth client credentials, deploys all
 # metadata (with the cloud's hosts patched into a temporary copy of the
 # project), sets the client id/secret on the External Credential principal,
-# and assigns the permission sets. Attaching the Login Flow to the profile is
-# a Setup step it prints at the end: LoginFlow isn't available through the
-# REST or Tooling API.
+# grants the chosen profile the access the flow needs, runs Test Connection,
+# and, if it passes and the operator agrees, attaches the Login Flow to the
+# profile.
 #
 # Requirements:
 #   - `sf` CLI installed (npm install --global @salesforce/cli)
@@ -34,8 +34,9 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 API_VERSION="67.0"
 EXTERNAL_CREDENTIAL="NGIS_SGNL_Falcon_OAuth"
 PRINCIPAL_NAME="NGIS_SGNL_Principal"
-USER_PERMSET="NGIS_SGNL_Login_Flow_User"
 ADMIN_PERMSET="NGIS_SGNL_Login_Flow_Admin"
+LOGIN_FLOW_PAGE="LoginFlowPermSets"
+LOGIN_FLOW_CLASSES=(LoginFlowConfig LoginFlowController SgnlClient)
 # Same allowlist as ngis-sgnl-policy-action: access.crowdstrike.com or access.<cloud>.crowdstrike.com
 ACCESS_HOST_PATTERN='^access\.([a-z0-9-]+\.)*crowdstrike\.(com|red|black)$'
 
@@ -161,10 +162,10 @@ fi
 heading "Login Flow assignment"
 
 cat <<EOF
-Choose the profile whose users should see the SGNL permission set picker at
-login. Its active users get the $USER_PERMSET permission set now, and
-you attach the Login Flow to this profile at the end. Don't choose the
-profile your own admin account uses.
+Choose the profiles whose users should see the SGNL permission set picker at
+login. The script grants each profile the access the flow needs, so users
+added to it later are covered too, and can attach the Login Flow to it at the
+end. Don't choose the profile your own admin account uses.
 
 Profiles with active users:
 EOF
@@ -177,24 +178,47 @@ for i in "${!PROFILE_ROWS[@]}"; do
 done
 echo
 
-# Look up the profile right away, before changing anything, so a typo can be
-# fixed here.
-PROFILE_ID=""
-while [[ -z "$PROFILE_ID" ]]; do
-  prompt "Profile number or name: "
-  read -r PROFILE_NAME
-  if [[ "$PROFILE_NAME" =~ ^[0-9]+$ ]] && (( PROFILE_NAME >= 1 && PROFILE_NAME <= ${#PROFILE_ROWS[@]} )); then
-    PROFILE_NAME="${PROFILE_ROWS[$((PROFILE_NAME - 1))]%%$'\t'*}"
+# Look up the profiles right away, before changing anything, so a typo can be
+# fixed here. Any answer that doesn't resolve asks for the whole list again.
+PROFILE_NAMES=()
+PROFILE_IDS=()
+while (( ${#PROFILE_IDS[@]} == 0 )); do
+  prompt "Profile numbers or names, separated by commas (e.g. 4,5): "
+  read -r PROFILE_INPUT
+  IFS=, read -ra PROFILE_CHOICES <<< "$PROFILE_INPUT"
+  CHOSEN_NAMES=()
+  CHOSEN_IDS=()
+  CHOICES_OK=true
+  for choice in "${PROFILE_CHOICES[@]}"; do
+    # Trim surrounding whitespace.
+    choice="${choice#"${choice%%[![:space:]]*}"}"
+    choice="${choice%"${choice##*[![:space:]]}"}"
+    [[ -z "$choice" ]] && continue
+    if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#PROFILE_ROWS[@]} )); then
+      choice="${PROFILE_ROWS[$((choice - 1))]%%$'\t'*}"
+    fi
+    CHOICE_ID="$(sf data query \
+      --target-org "$ORG_ALIAS" \
+      --query "SELECT Id FROM Profile WHERE Name='$(soql_escape "$choice")' LIMIT 1" \
+      --json 2>/dev/null | jq -r '.result.records[0].Id // empty' || true)"
+    if [[ -z "$CHOICE_ID" ]]; then
+      fail "Profile '$choice' not found. Use the number from the list, or the profile's name as shown in Setup → Profiles."
+      CHOICES_OK=false
+      break
+    fi
+    # Skip a profile chosen twice.
+    [[ " ${CHOSEN_IDS[*]} " == *" $CHOICE_ID "* ]] && continue
+    CHOSEN_NAMES+=("$choice")
+    CHOSEN_IDS+=("$CHOICE_ID")
+  done
+  if [[ "$CHOICES_OK" == true ]]; then
+    if (( ${#CHOSEN_IDS[@]} == 0 )); then
+      fail "Choose at least one profile."
+    else
+      PROFILE_NAMES=("${CHOSEN_NAMES[@]}")
+      PROFILE_IDS=("${CHOSEN_IDS[@]}")
+    fi
   fi
-  if [[ -z "$PROFILE_NAME" ]]; then
-    fail "Profile is required."
-    continue
-  fi
-  PROFILE_ID="$(sf data query \
-    --target-org "$ORG_ALIAS" \
-    --query "SELECT Id FROM Profile WHERE Name='$(soql_escape "$PROFILE_NAME")' LIMIT 1" \
-    --json 2>/dev/null | jq -r '.result.records[0].Id // empty' || true)"
-  [[ -z "$PROFILE_ID" ]] && fail "Profile '$PROFILE_NAME' not found. Use the profile's name as shown in Setup → Profiles."
 done
 
 heading "Pre-login evaluation"
@@ -215,13 +239,17 @@ if [[ "$PRELOGIN_ANSWER" =~ ^[Yy]$ ]]; then
 fi
 
 # -----------------------------------------------------------------------------
-# Look up the Org Id before changing anything
+# Look up the profiles' metadata names and the Org Id before changing anything
 # -----------------------------------------------------------------------------
-PROFILE_ID="$(sf data query \
-  --target-org "$ORG_ALIAS" \
-  --query "SELECT Id FROM Profile WHERE Name='$(soql_escape "$PROFILE_NAME")' LIMIT 1" \
-  --json 2>/dev/null | jq -r '.result.records[0].Id // empty')"
-[[ -z "$PROFILE_ID" ]] && die "Profile '$PROFILE_NAME' not found."
+# Profile metadata files use the API name (Standard User is "Standard"), not
+# the display name.
+PROFILE_MD_JSON="$(sf org list metadata --metadata-type Profile --target-org "$ORG_ALIAS" --json 2>/dev/null || true)"
+PROFILE_API_NAMES=()
+for i in "${!PROFILE_IDS[@]}"; do
+  API_NAME="$(NGIS_PROFILE_ID="${PROFILE_IDS[$i]}" jq -r '.result[]? | select(.id == env.NGIS_PROFILE_ID) | .fullName' <<<"$PROFILE_MD_JSON" 2>/dev/null | head -1 || true)"
+  [[ -z "$API_NAME" ]] && die "Could not find the metadata name for profile '${PROFILE_NAMES[$i]}'."
+  PROFILE_API_NAMES+=("$API_NAME")
+done
 
 # The flow sends <15-char Org Id>_search / _evaluate as context.routingKey;
 # the SGNL admin needs both values for the provider hook's integration
@@ -249,10 +277,13 @@ cat <<EOF
   Access host:         $ACCESS_HOST
   Token host:          $TOKEN_HOST
   Client credentials:  $( [[ -n "$CLIENT_ID" ]] && echo "supplied" || echo "not supplied; set in Setup later" )
-  Login Flow profile:  $PROFILE_NAME ($PROFILE_ID)
   Pre-login enabled:   $PRELOGIN_ENABLED  (action: $PRELOGIN_ACTION)
-
+  Login Flow profiles:
 EOF
+for i in "${!PROFILE_IDS[@]}"; do
+  printf '    %s (%s, %s)\n' "${PROFILE_NAMES[$i]}" "${PROFILE_API_NAMES[$i]}" "${PROFILE_IDS[$i]}"
+done
+echo
 prompt "Proceed? [y/N]: "
 read -r GO
 [[ "$GO" =~ ^[Yy]$ ]] || die "Aborted."
@@ -277,6 +308,25 @@ sed "s|https://api.crowdstrike.com/oauth2/token|https://$TOKEN_HOST/oauth2/token
 grep -q "https://$ACCESS_HOST<" "$NC_FILE" || die "Failed to patch the Named Credential URL."
 grep -q "https://$TOKEN_HOST/oauth2/token<" "$EC_FILE" || die "Failed to patch the External Credential token URL."
 ok "Staged with https://$ACCESS_HOST and https://$TOKEN_HOST/oauth2/token"
+
+# The flow's page and Apex classes are granted on each profile, so every user
+# on it has them, including users added later. A Profile deploy changes only
+# the elements in the file. The credential access can't go in Profile
+# metadata; step 4 grants it through the API.
+PROFILE_DIR="$STAGE_DIR/force-app/main/default/profiles"
+mkdir -p "$PROFILE_DIR"
+for i in "${!PROFILE_IDS[@]}"; do
+  {
+    echo '<?xml version="1.0" encoding="UTF-8"?>'
+    echo '<Profile xmlns="http://soap.sforce.com/2006/04/metadata">'
+    for cls in "${LOGIN_FLOW_CLASSES[@]}"; do
+      printf '    <classAccesses>\n        <apexClass>%s</apexClass>\n        <enabled>true</enabled>\n    </classAccesses>\n' "$cls"
+    done
+    printf '    <pageAccesses>\n        <apexPage>%s</apexPage>\n        <enabled>true</enabled>\n    </pageAccesses>\n' "$LOGIN_FLOW_PAGE"
+    echo '</Profile>'
+  } > "$PROFILE_DIR/${PROFILE_API_NAMES[$i]}.profile-meta.xml"
+  ok "Staged page and Apex class access for profile '${PROFILE_NAMES[$i]}'"
+done
 
 # The flow reads its settings from LoginFlow_Config.Default. Save every
 # setting, so admins see real values when they edit the record in Setup. A new
@@ -412,9 +462,9 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# Step 4: Permission sets
+# Step 4: Access
 # -----------------------------------------------------------------------------
-heading "4. Assigning permission sets"
+heading "4. Granting access"
 
 ADMIN_PS_ID="$(sf data query --target-org "$ORG_ALIAS" \
   --query "SELECT Id FROM PermissionSet WHERE Name='$ADMIN_PERMSET' LIMIT 1" \
@@ -438,76 +488,52 @@ else
   fi
 fi
 
-# Every user who hits the login flow needs the user permission set before the
-# flow is attached. It's the only grant for the LoginFlowPermSets page, so
-# without it the user gets Insufficient Privileges and can't log in.
-#
-# Users are assigned in pages ordered by Id, one anonymous Apex run per page,
-# so large profiles stay under the per-transaction limits (10,000 DML rows,
-# 50,000 query rows). Paging by Id also means users whose assignment fails
-# (e.g. a license mismatch) don't stall the loop.
-ASSIGN_PAGE_SIZE=5000
-LAST_USER_ID=""
-TOTAL_ADDED=0
-TOTAL_NEEDED=0
-PAGE_NUM=0
-while true; do
-  PAGE_NUM=$((PAGE_NUM + 1))
-  ID_FILTER=""
-  [[ -n "$LAST_USER_ID" ]] && ID_FILTER="AND Id > '$LAST_USER_ID'"
+# Each profile also needs the External Credential principal access, or the
+# flow's SGNL calls fail for its users. Profile metadata can't carry it, so it
+# goes on the permission set every profile owns (IsOwnedByProfile) as a
+# SetupEntityAccess row. The principal isn't queryable directly; the admin
+# permission set grants it, so its row gives the principal's Id.
+manual_profile_credential_steps() {
+  warn "Grant it manually: Setup → Profiles → $1 → Enabled External Credential"
+  warn "  Principal Access → Edit → add $EXTERNAL_CREDENTIAL - $PRINCIPAL_NAME"
+}
 
-  cat > "$WORK_DIR/assign_users.apex" <<APEX
-Id psId = [SELECT Id FROM PermissionSet WHERE Name = '$USER_PERMSET' LIMIT 1].Id;
-List<User> users = [SELECT Id FROM User WHERE ProfileId = '$PROFILE_ID' AND IsActive = true $ID_FILTER ORDER BY Id LIMIT $ASSIGN_PAGE_SIZE];
-Set<Id> userIds = new Map<Id, User>(users).keySet();
-Set<Id> already = new Set<Id>();
-for (PermissionSetAssignment a : [SELECT AssigneeId FROM PermissionSetAssignment WHERE PermissionSetId = :psId AND AssigneeId IN :userIds]) {
-    already.add(a.AssigneeId);
-}
-List<PermissionSetAssignment> toAdd = new List<PermissionSetAssignment>();
-for (User u : users) {
-    if (!already.contains(u.Id)) {
-        toAdd.add(new PermissionSetAssignment(PermissionSetId = psId, AssigneeId = u.Id));
-    }
-}
-Integer added = 0;
-for (Database.SaveResult r : Database.insert(toAdd, false)) {
-    if (r.isSuccess()) { added++; }
-}
-String lastId = users.isEmpty() ? '' : String.valueOf(users[users.size() - 1].Id);
-System.debug('NGIS_PAGE=' + users.size() + '/' + added + '/' + toAdd.size() + '/' + lastId);
-APEX
+PRINCIPAL_ENTITY_ID="$(sf data query --target-org "$ORG_ALIAS" \
+  --query "SELECT SetupEntityId FROM SetupEntityAccess WHERE Parent.Name = '$ADMIN_PERMSET' AND SetupEntityType = 'ExternalCredentialParameter' LIMIT 1" \
+  --json 2>/dev/null | jq -r '.result.records[0].SetupEntityId // empty' || true)"
 
-  if ! sf apex run --file "$WORK_DIR/assign_users.apex" --target-org "$ORG_ALIAS" \
-      > "$WORK_DIR/assign_users.log" 2>&1; then
-    cat "$WORK_DIR/assign_users.log"
-    die "Failed to assign $USER_PERMSET (page $PAGE_NUM). Don't attach the Login Flow until every user on the profile has it."
+# PROFILE_ACCESS[i] is true once profile i has every grant the flow needs.
+PROFILE_ACCESS=()
+for i in "${!PROFILE_IDS[@]}"; do
+  P_NAME="${PROFILE_NAMES[$i]}"
+  PROFILE_ACCESS[i]=false
+  PROFILE_PS_ID="$(sf data query --target-org "$ORG_ALIAS" \
+    --query "SELECT Id FROM PermissionSet WHERE IsOwnedByProfile = true AND ProfileId = '${PROFILE_IDS[$i]}' LIMIT 1" \
+    --json 2>/dev/null | jq -r '.result.records[0].Id // empty' || true)"
+
+  # Both Ids go back into a command, so only accept the expected key prefixes.
+  if [[ ! "$PROFILE_PS_ID" =~ ^0PS[A-Za-z0-9]{12}([A-Za-z0-9]{3})?$ || ! "$PRINCIPAL_ENTITY_ID" =~ ^0pu[A-Za-z0-9]{12}([A-Za-z0-9]{3})?$ ]]; then
+    warn "Could not look up profile '$P_NAME' or the credential principal, so the profile doesn't have credential access yet."
+    manual_profile_credential_steps "$P_NAME"
+    continue
   fi
-
-  PAGE_RESULT="$(grep -oE 'NGIS_PAGE=[0-9]+/[0-9]+/[0-9]+/[A-Za-z0-9]*' "$WORK_DIR/assign_users.log" | head -1 | cut -d= -f2 || true)"
-  if [[ -z "$PAGE_RESULT" ]]; then
-    cat "$WORK_DIR/assign_users.log"
-    die "Could not read the assignment result (page $PAGE_NUM). Don't attach the Login Flow until every user on the profile has it."
+  EXISTING_GRANT="$(sf data query --target-org "$ORG_ALIAS" \
+    --query "SELECT Id FROM SetupEntityAccess WHERE ParentId = '$PROFILE_PS_ID' AND SetupEntityId = '$PRINCIPAL_ENTITY_ID'" \
+    --json 2>/dev/null | jq -r '.result.records[0].Id // empty' || true)"
+  if [[ -n "$EXISTING_GRANT" ]]; then
+    PROFILE_ACCESS[i]=true
+    ok "Profile '$P_NAME' already has credential access."
+  elif sf data create record --sobject SetupEntityAccess \
+      --values "ParentId=$PROFILE_PS_ID SetupEntityId=$PRINCIPAL_ENTITY_ID" \
+      --target-org "$ORG_ALIAS" > "$WORK_DIR/profile_grant.log" 2>&1; then
+    PROFILE_ACCESS[i]=true
+    ok "Granted credential access to profile '$P_NAME'."
+  else
+    cat "$WORK_DIR/profile_grant.log"
+    warn "Could not grant credential access to profile '$P_NAME'."
+    manual_profile_credential_steps "$P_NAME"
   fi
-  IFS=/ read -r PAGE_USERS PAGE_ADDED PAGE_NEEDED PAGE_LAST_ID <<< "$PAGE_RESULT"
-
-  TOTAL_ADDED=$((TOTAL_ADDED + PAGE_ADDED))
-  TOTAL_NEEDED=$((TOTAL_NEEDED + PAGE_NEEDED))
-  info "Page $PAGE_NUM: $PAGE_USERS users, added $PAGE_ADDED of $PAGE_NEEDED needed."
-
-  # A short page is the last one.
-  (( PAGE_USERS < ASSIGN_PAGE_SIZE )) && break
-
-  # The cursor goes back into SOQL, so only accept a User Id.
-  [[ "$PAGE_LAST_ID" =~ ^005[A-Za-z0-9]{12}([A-Za-z0-9]{3})?$ ]] \
-    || die "Unexpected user Id '$PAGE_LAST_ID' (page $PAGE_NUM). Don't attach the Login Flow until every user on the profile has it."
-  LAST_USER_ID="$PAGE_LAST_ID"
 done
-
-ok "Assigned $USER_PERMSET to active '$PROFILE_NAME' users (added/needed: $TOTAL_ADDED/$TOTAL_NEEDED)."
-if (( TOTAL_ADDED != TOTAL_NEEDED )); then
-  warn "Some assignments failed (often a license mismatch). Check those users before relying on the flow."
-fi
 
 # -----------------------------------------------------------------------------
 # Step 5: Test Connection
@@ -566,6 +592,102 @@ APEX
 fi
 
 # -----------------------------------------------------------------------------
+# Step 6: Attach the Login Flow
+# -----------------------------------------------------------------------------
+# Lockout ordering: attach only to a profile that has all the access, only
+# after Test Connection passed, and only if the operator says so. A profile has
+# at most one Login Flow, which lives in Profile metadata (LoginFlow isn't
+# available through the REST or Tooling API), so read each profile first to
+# see what's there.
+heading "6. Login Flow"
+
+# Comma-separated display names, for the closing steps.
+join_names() { local IFS=,; printf '%s' "$*" | sed 's/,/, /g'; }
+
+ATTACHED_NAMES=()
+NOT_ATTACHED_NAMES=()
+NO_ACCESS_NAMES=()
+for i in "${!PROFILE_IDS[@]}"; do
+  P_NAME="${PROFILE_NAMES[$i]}"
+  P_API="${PROFILE_API_NAMES[$i]}"
+  if [[ "${PROFILE_ACCESS[$i]}" != true ]]; then
+    NO_ACCESS_NAMES+=("$P_NAME")
+    NOT_ATTACHED_NAMES+=("$P_NAME")
+    info "Not attaching the Login Flow to '$P_NAME': the profile doesn't have all its access yet."
+    continue
+  fi
+  if [[ "$TEST_PASSED" != true ]]; then
+    NOT_ATTACHED_NAMES+=("$P_NAME")
+    info "Not attaching the Login Flow to '$P_NAME': Test Connection must pass first."
+    continue
+  fi
+
+  CURRENT_FLOW_PAGE=""
+  RETRIEVE_DIR="$WORK_DIR/profile_retrieve_$i"
+  if (cd "$STAGE_DIR" && sf project retrieve start --metadata "Profile:$P_API" \
+      --target-org "$ORG_ALIAS" --target-metadata-dir "$RETRIEVE_DIR" --unzip) \
+      > "$WORK_DIR/profile_retrieve.log" 2>&1; then
+    PROFILE_FILE="$(find "$RETRIEVE_DIR" -name '*.profile' | head -1)"
+    if [[ -n "$PROFILE_FILE" ]] && grep -q '<loginFlows>' "$PROFILE_FILE"; then
+      CURRENT_FLOW_PAGE="$(grep -oE '<vfFlowPage>[^<]*' "$PROFILE_FILE" | head -1 | cut -d'>' -f2)"
+      CURRENT_FLOW_PAGE="${CURRENT_FLOW_PAGE:-(a Flow-based login flow)}"
+    fi
+  else
+    warn "Could not read profile '$P_NAME' to check for an existing Login Flow."
+    CURRENT_FLOW_PAGE="(unknown)"
+  fi
+
+  ATTACH=false
+  if [[ "$CURRENT_FLOW_PAGE" == "$LOGIN_FLOW_PAGE" ]]; then
+    ATTACHED_NAMES+=("$P_NAME")
+    ok "The Login Flow is already attached to '$P_NAME'."
+    continue
+  elif [[ -n "$CURRENT_FLOW_PAGE" ]]; then
+    warn "Profile '$P_NAME' already has a Login Flow: $CURRENT_FLOW_PAGE."
+    prompt "Replace it with the SGNL Login Flow? [y/N]: "
+    read -r REPLACE_FLOW
+    [[ "$REPLACE_FLOW" =~ ^[Yy]$ ]] && ATTACH=true
+  else
+    prompt "Attach the Login Flow to '$P_NAME' now? Its users see it at their next login. [y/N]: "
+    read -r ATTACH_FLOW
+    [[ "$ATTACH_FLOW" =~ ^[Yy]$ ]] && ATTACH=true
+  fi
+
+  if [[ "$ATTACH" != true ]]; then
+    NOT_ATTACHED_NAMES+=("$P_NAME")
+    info "Not attaching the Login Flow to '$P_NAME'."
+    continue
+  fi
+
+  # A separate deploy with only the profile's loginFlows element.
+  ATTACH_DIR="$WORK_DIR/attach_$i"
+  mkdir -p "$ATTACH_DIR/force-app/main/default/profiles" "$ATTACH_DIR/sgnl-credentials"
+  cp "$REPO_ROOT/sfdx-project.json" "$ATTACH_DIR/"
+  cat > "$ATTACH_DIR/force-app/main/default/profiles/$P_API.profile-meta.xml" <<XML
+<?xml version="1.0" encoding="UTF-8"?>
+<Profile xmlns="http://soap.sforce.com/2006/04/metadata">
+    <loginFlows>
+        <flowType>UI</flowType>
+        <friendlyName>SGNL Permission Set Selection</friendlyName>
+        <uiLoginFlowType>VisualForce</uiLoginFlowType>
+        <useLightningRuntime>false</useLightningRuntime>
+        <vfFlowPage>$LOGIN_FLOW_PAGE</vfFlowPage>
+        <vfFlowPageTitle>$LOGIN_FLOW_PAGE</vfFlowPageTitle>
+    </loginFlows>
+</Profile>
+XML
+  if (cd "$ATTACH_DIR" && sf project deploy start --source-dir force-app \
+      --target-org "$ORG_ALIAS" --ignore-conflicts --wait 30) > "$WORK_DIR/attach.log" 2>&1; then
+    ATTACHED_NAMES+=("$P_NAME")
+    ok "Attached the Login Flow to '$P_NAME'."
+  else
+    cat "$WORK_DIR/attach.log"
+    NOT_ATTACHED_NAMES+=("$P_NAME")
+    warn "Could not attach the Login Flow to '$P_NAME'. Attach it in Setup instead (see the steps below)."
+  fi
+done
+
+# -----------------------------------------------------------------------------
 # Done
 # -----------------------------------------------------------------------------
 heading "Done"
@@ -579,6 +701,31 @@ else
      you skipped them, then open the admin page and click \"Test Connection\".
      It should return HTTP 200 and a JSON body listing your permission sets.
      ${c_dim}sf org open --target-org $ORG_ALIAS --path /lightning/n/Login_Flow_Admin${c_reset}"
+fi
+
+FLOW_STEP="  3."
+if (( ${#ATTACHED_NAMES[@]} > 0 )); then
+  FLOW_STEP+=" The Login Flow is attached to: $(join_names "${ATTACHED_NAMES[@]}").
+    "
+fi
+if (( ${#NOT_ATTACHED_NAMES[@]} > 0 )); then
+  FLOW_STEP+=" Not attached yet: $(join_names "${NOT_ATTACHED_NAMES[@]}"). Only after Test
+     Connection succeeds, attach it: rerun this script, or Setup → Identity →
+     Login Flows → New. Flow Type \"Visualforce Page\", page $LOGIN_FLOW_PAGE,
+     then assign it to each profile.
+    "
+fi
+FLOW_STEP+=" Keep an admin on a profile without the flow."
+
+if (( ${#NO_ACCESS_NAMES[@]} == 0 )); then
+  ACCESS_STEP="  4. The profiles have the access the flow needs, so users added to them
+     later are covered. To use the flow on another profile, rerun this script
+     and choose it."
+else
+  ACCESS_STEP="  4. ${c_bold}No credential access yet: $(join_names "${NO_ACCESS_NAMES[@]}").${c_reset} Grant it in
+     Setup → Profiles → (profile) → Enabled External Credential Principal
+     Access, or rerun this script. Without it the flow can't call SGNL for
+     those profiles' users."
 fi
 
 cat <<EOF
@@ -597,16 +744,11 @@ Next steps:
 
 $TEST_STEP
 
-  3. Only after Test Connection succeeds, attach the Login Flow:
-     Setup → Identity → Login Flows → New. Flow Type "Visualforce Page",
-     page LoginFlowPermSets, profile '$PROFILE_NAME'. Keep an admin on a
-     profile without the flow.
+$FLOW_STEP
 
-  4. Assign $USER_PERMSET to users added to '$PROFILE_NAME' later,
-     before they log in. Without it they get Insufficient Privileges and
-     can't log in.
+$ACCESS_STEP
 
-  5. Test the flow: log in with a user on '$PROFILE_NAME'. They should see
-     the permission set picker after authenticating.
+  5. Test the flow: log in with a user on one of the profiles. They should
+     see the permission set picker after authenticating.
 
 EOF

@@ -33,11 +33,11 @@ The access and token hosts differ per Falcon cloud. If the Named Credential and 
 
 The token identifies the Salesforce org (one API client per org), not the user. SGNL does not compare `principal.id` in the body to anything in the token. So any code in the org that can make the callout can ask SGNL about any principal mapped to the provider. This is the same model as the CrowdStrike GitHub policy action, which also asserts the principal in the body. The exposure is bounded by:
 
-- Only users with External Credential principal access can make the callout (the `NGIS_SGNL_*` permission sets).
+- Only users with External Credential principal access can make the callout: users on the flow's profile, and admins with `NGIS_SGNL_Login_Flow_Admin`.
 - Running arbitrary callouts needs Author Apex.
 - The API client's scope is read-only (`sgnl-access:read`).
 
-**Why credential access can't come from a session permission set activated by this flow:** the callouts in `init()` happen before anything is activated. Credential access must come from a permanently assigned permission set (`NGIS_SGNL_Login_Flow_User`).
+**Why credential access can't come from a session permission set activated by this flow:** the callouts in `init()` happen before anything is activated. Credential access must be permanent: it's granted on the flow's profile (see "Flow user access" below).
 
 ---
 
@@ -195,9 +195,17 @@ Salesforce lets a user activate their own assigned session permission sets with 
 
 ## Flow user access
 
-### Users added to the profile later are locked out
+### Why access is granted on the profile
 
-The Login Flow is attached per profile, but the profile's Login Flow setting only names the VF page; it grants nothing. Access to the `LoginFlowPermSets` page, the controller classes and the External Credential principal all come from `NGIS_SGNL_Login_Flow_User`. A user on the profile without that permission set gets Insufficient Privileges right after authenticating and can't log in, with the pre-login check on or off. The bootstrap script assigns the permission set to the profile's active users when it runs, so anyone added to the profile afterwards is locked out until an admin assigns it.
+The Login Flow is attached per profile, but the profile's Login Flow setting only names the VF page; it grants nothing. A user also needs access to the `LoginFlowPermSets` page, the controller classes and the External Credential principal. Without page access they get Insufficient Privileges right after authenticating and can't log in, with the pre-login check on or off.
+
+Those grants live on the same profile as the Login Flow, so they cover exactly the users who go through the flow, including users added to the profile later. A permission set would have to be assigned to each user, and anyone added afterwards would be locked out until an admin assigned it.
+
+### How the bootstrap script grants it
+
+- **Page and Apex class access:** a generated Profile file per chosen profile with `pageAccesses` and `classAccesses`, deployed with the rest of `force-app`. A Profile deploy changes only the elements in the file, so the profile's other settings are kept. Profile metadata uses API names, not display names (Standard User is `Standard`), so the script maps each chosen profile's Id to its name with `sf org list metadata --metadata-type Profile`.
+- **External Credential principal access:** Profile metadata doesn't accept `externalCredentialPrincipalAccesses`, although Setup shows the grant on profiles. The script inserts it through the API as a `SetupEntityAccess` row on the permission set every profile owns (`IsOwnedByProfile = true`). `ExternalCredentialParameter` isn't queryable, so the script takes the principal's Id from the same grant on `NGIS_SGNL_Login_Flow_Admin`.
+- **The Login Flow itself:** the profile's `loginFlows` element, in a separate deploy (see "Lockout ordering" below).
 
 ---
 
@@ -206,9 +214,8 @@ The Login Flow is attached per profile, but the profile's Login Flow setting onl
 - **Never touches the working tree.** It copies the project into `mktemp -d`, patches the hosts and optional CMT record there, and deploys from the copy.
 - **Hosts are allowlisted.** The access host must match `^access\.([a-z0-9-]+\.)*crowdstrike\.(com|red|black)$` (the same check as the CrowdStrike GitHub policy action); the token host is `api.` plus the rest. Validated hosts are safe to substitute with `sed`.
 - **The secret never appears on a command line.** It's read with `read -rs`, passed to `jq` through the environment, written to a mode-600 file (`umask 077`), and sent with `sf api request rest --body @file`. POST creates the principal's credentials; PUT updates them on re-runs.
-- **Lockout ordering.** The script never attaches the Login Flow. It prints the Setup steps to attach it last, after the user permission set is assigned and after Test Connection. If the assignment fails, the script stops and says not to attach the flow. To attach the flow by deployment instead, use the profile's `loginFlows` metadata (`LoginFlow` isn't available through the REST or Tooling API). A Profile deploy changes only the elements in the file, and Profile metadata uses API names, not display names: Standard User is `Standard`.
-- **Test Connection from the script.** After the permission sets, the script runs `LoginFlowAdminController.testConnection()` as anonymous Apex, so the result matches the admin page's button. It runs as the operator, who now has the admin permission set and with it the credential access. It reads the result from `USER_DEBUG` lines, because `sf apex run` also echoes the source. The closing steps say whether the test passed.
-- **Paged assignment.** Users are assigned in pages of 5,000, ordered by Id, one anonymous Apex run per page, so large profiles stay under the per-transaction limits (10,000 DML rows, 50,000 query rows). Each page resumes after the previous page's last Id, so users whose assignment keeps failing (for example a license mismatch) can't stall the loop. If a page's result can't be read, the script stops without creating the flow.
+- **Lockout ordering.** The operator can choose several profiles; the script handles each one separately. It attaches the Login Flow to a profile last, and only when three things are true: that profile has all its access, Test Connection passed, and the operator says yes for that profile. A profile has at most one Login Flow, so the script retrieves each profile first. If it already has the SGNL flow it does nothing; if it has a different one, it asks before replacing it. `LoginFlow` isn't available through the REST or Tooling API, so the attach is a deploy of the profile's `loginFlows` element. The closing steps list which profiles have the flow and how to attach it to the rest in Setup.
+- **Test Connection from the script.** After the access grants, the script runs `LoginFlowAdminController.testConnection()` as anonymous Apex, so the result matches the admin page's button. It runs as the operator, who now has the admin permission set and with it the credential access. It reads the result from `USER_DEBUG` lines, because `sf apex run` also echoes the source. The closing steps say whether the test passed.
 - **Idempotent.** Existing assignments are left alone; credentials are updated.
 - **`jq` is required** for parsing `sf --json` output reliably.
 
