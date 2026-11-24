@@ -4,9 +4,10 @@
  * Read-only: shows the effective configuration, the SGNL provider hook
  * values for this org, and links to Setup, where
  * admins edit the LoginFlow_Config__mdt.Default record (needs Customize
- * Application). Also exposes a test-connection endpoint that fires a
- * listPermissionSets call through the NGIS_SGNL_Access Named Credential so
- * admins can verify credentials without triggering a real login flow.
+ * Application). Also exposes a test-connection endpoint that runs the first
+ * page of the login's permission set search through the NGIS_SGNL_Access
+ * Named Credential so admins can verify credentials without triggering a
+ * real login flow.
  */
 public with sharing class LoginFlowAdminController {
 
@@ -15,8 +16,15 @@ public with sharing class LoginFlowAdminController {
         + 'NGIS_SGNL_Falcon_OAuth principal, that the token URL and the NGIS_SGNL_Access URL '
         + 'match your Falcon cloud, and that you have the NGIS SGNL Login Flow Admin permission set.';
     @TestVisible private static final String HINT_UNAUTHORIZED =
-        'The authorizer rejected the request. Check that the Falcon API client has the '
-        + 'sgnl-access:read scope and is mapped to your SGNL provider.';
+        'SGNL rejected the request. Check that the Falcon API client is mapped to your SGNL provider, '
+        + 'and that the provider has an integration assignment for this org\'s Protected System with '
+        + 'application Id path ' + SgnlClient.APPLICATION_ID_PATH + ' and the application Id shown above.';
+    @TestVisible private static final String HINT_FORBIDDEN =
+        'The authorizer rejected the token. Check that the Falcon API client has the sgnl-access:read scope.';
+    @TestVisible private static final String HINT_BAD_REQUEST =
+        'Another integration assignment on your SGNL provider uses an application Id path this request '
+        + 'doesn\'t carry. Give the login flow its own provider, or use ' + SgnlClient.APPLICATION_ID_PATH
+        + ' for every assignment on it.';
 
     @TestVisible private static final String EXTERNAL_CREDENTIAL = 'NGIS_SGNL_Falcon_OAuth';
     @TestVisible private static final String PRINCIPAL           = 'NGIS_SGNL_Principal';
@@ -32,10 +40,10 @@ public with sharing class LoginFlowAdminController {
         LoginFlowConfig c = LoginFlowConfig.getInstance();
         ConfigDTO dto = new ConfigDTO();
         dto.namedCredential      = SgnlClient.NAMED_CREDENTIAL;
-        dto.apiPath              = SgnlClient.PATH;
-        dto.routingKeyPath       = SgnlClient.ROUTING_KEY_PATH;
-        dto.routingKeySearch     = c.routingKeySearch;
-        dto.routingKeyEvaluate   = c.routingKeyEvaluate;
+        dto.evaluationsPath      = SgnlClient.PATH_EVALUATIONS;
+        dto.searchPath           = SgnlClient.PATH_SEARCH;
+        dto.applicationIdPath    = SgnlClient.APPLICATION_ID_PATH;
+        dto.applicationId        = SgnlClient.currentOrgId();
         dto.preLoginCheckEnabled = c.preLoginCheckEnabled;
         dto.preLoginAction       = c.preLoginAction;
         dto.denialMessage        = c.denialMessage;
@@ -86,23 +94,26 @@ public with sharing class LoginFlowAdminController {
     }
 
     /**
-     * Fires a listPermissionSets call against SGNL as the current user using
-     * the saved config. Never throws for auth/HTTP errors, so the UI can show
+     * Runs the first page of the login's permission set search against SGNL as
+     * the current user. Never throws for auth/HTTP errors, so the UI can show
      * useful diagnostics.
      */
     @AuraEnabled
     public static TestResultDTO testConnection() {
-        LoginFlowConfig c = LoginFlowConfig.getInstance();
         TestResultDTO result = new TestResultDTO();
         try {
-            HttpResponse res = SgnlClient.send(SgnlClient.currentPrincipalId(), c.routingKeySearch, new List<SgnlClient.Query>{
-                new SgnlClient.Query(SgnlClient.ACTION_LIST_PERMISSION_SETS, null)
+            HttpResponse res = SgnlClient.send(SgnlClient.SEARCH_ENDPOINT, SgnlClient.currentPrincipalId(), new List<SgnlClient.Query>{
+                new SgnlClient.Query(SgnlClient.ACTION_ASSUME_PERMISSION_SET, null)
             });
             result.statusCode = res.getStatusCode();
             result.body       = res.getBody();
             result.ok         = result.statusCode >= 200 && result.statusCode < 300;
-            if (result.statusCode == 401 || result.statusCode == 403) {
+            if (result.statusCode == 400) {
+                result.hintText = HINT_BAD_REQUEST;
+            } else if (result.statusCode == 401) {
                 result.hintText = HINT_UNAUTHORIZED;
+            } else if (result.statusCode == 403) {
+                result.hintText = HINT_FORBIDDEN;
             }
         } catch (Exception e) {
             // Includes External Credential token-fetch failures
@@ -116,12 +127,12 @@ public with sharing class LoginFlowAdminController {
 
     public class ConfigDTO {
         @AuraEnabled public String  namedCredential      { get; set; }
-        @AuraEnabled public String  apiPath              { get; set; }
-        // What the SGNL admin enters on the provider hook for this org: the
-        // application Id path, and one integration assignment per routing key
-        @AuraEnabled public String  routingKeyPath       { get; set; }
-        @AuraEnabled public String  routingKeySearch     { get; set; }
-        @AuraEnabled public String  routingKeyEvaluate   { get; set; }
+        @AuraEnabled public String  evaluationsPath      { get; set; }
+        @AuraEnabled public String  searchPath           { get; set; }
+        // What the SGNL admin enters on the provider hook's integration
+        // assignment for this org
+        @AuraEnabled public String  applicationIdPath    { get; set; }
+        @AuraEnabled public String  applicationId        { get; set; }
         @AuraEnabled public Boolean preLoginCheckEnabled { get; set; }
         @AuraEnabled public String  preLoginAction       { get; set; }
         @AuraEnabled public String  denialMessage        { get; set; }

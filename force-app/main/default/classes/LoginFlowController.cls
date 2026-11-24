@@ -1,8 +1,7 @@
 public with sharing class LoginFlowController {
 
     @TestVisible private static final String MSG_LIST_FAILED   = 'Unable to load permission sets right now. You can continue without them.';
-    @TestVisible private static final String MSG_LIST_DENIED   = 'Access denied by SGNL. Contact your administrator.';
-    @TestVisible private static final String MSG_NO_SELECTION  = 'Please select at least one permission set, or click "Continue without activating".';
+    @TestVisible private static final String MSG_NO_SELECTION= 'Please select at least one permission set, or click "Continue without activating".';
     // Shown on an SGNL deny at submit, or when the selection no longer
     // matches what was offered or assigned. Wording agreed with product.
     @TestVisible private static final String MSG_NOT_APPROVED  = 'Your permitted access has changed. Sign out and log in again to have it re-evaluated, or continue without activating.';
@@ -53,25 +52,25 @@ public with sharing class LoginFlowController {
         }
 
         // Step 1: ask SGNL which permission sets the user may assume.
-        SgnlClient.ListResponse listed;
+        SgnlClient.SearchResult found;
         try {
-            listed = SgnlClient.listPermissionSets(SgnlClient.currentPrincipalId(), cfg.routingKeySearch);
+            found = SgnlClient.searchAllowedAssetIds(SgnlClient.currentPrincipalId(), SgnlClient.ACTION_ASSUME_PERMISSION_SET);
         } catch (Exception e) {
-            logFailure('listPermissionSets', e);
+            logFailure('search', e);
             errorMessage = MSG_LIST_FAILED;
             return null; // page shows the error and a Continue button
         }
-        if (!listed.isAllowed()) {
-            errorMessage = MSG_LIST_DENIED;
-            return null; // page shows the error and a Continue button
+        if (found.truncated) {
+            Integer readLimit = SgnlClient.SEARCH_PAGE_SIZE * SgnlClient.MAX_SEARCH_PAGES;
+            System.debug(LoggingLevel.WARN, 'SGNL login flow search returned more than ' + readLimit
+                + ' permission sets; offering the first ' + readLimit + '.');
         }
-        List<Id> sgnlIds = toPermSetIds(listed.permissionSetIds);
+        List<Id> sgnlIds = toPermSetIds(found.assetIds);
 
         Map<Id, String> eligible = new Privileged().eligiblePermSets(sgnlIds);
-        if (eligible.size() < sgnlIds.size()) {
-            System.debug(LoggingLevel.WARN, 'SGNL returned ' + sgnlIds.size() + ' permission sets; '
-                + eligible.size() + ' are session-based and assigned to the user.');
-        }
+        // Counts for admins: a large gap or a large count suggests a broad policy
+        System.debug(LoggingLevel.INFO, 'SGNL login flow: SGNL allowed ' + sgnlIds.size()
+            + ' permission sets; ' + eligible.size() + ' are offered.');
         if (eligible.isEmpty()) {
             return getFinishUrl(); // nothing to activate, pass through silently
         }
@@ -120,10 +119,11 @@ public with sharing class LoginFlowController {
             queries.add(new SgnlClient.Query(SgnlClient.ACTION_ASSUME_PERMISSION_SET, psId));
         }
 
+        System.debug(LoggingLevel.INFO, 'SGNL login flow: ' + selectedIds.size() + ' permission sets selected.');
+
         Boolean approved;
         try {
-            SgnlClient.EvaluateResponse res = SgnlClient.evaluate(SgnlClient.currentPrincipalId(), cfg.routingKeyEvaluate, queries);
-            approved = SgnlClient.allAllowed(queries, res);
+            approved = SgnlClient.allAllowedInBatches(SgnlClient.currentPrincipalId(), queries);
         } catch (Exception e) {
             logFailure('assumePermissionSet', e);
             errorMessage = MSG_VERIFY_FAILED;
@@ -166,7 +166,7 @@ public with sharing class LoginFlowController {
             new SgnlClient.Query(cfg.preLoginAction, null)
         };
         try {
-            SgnlClient.EvaluateResponse res = SgnlClient.evaluate(SgnlClient.currentPrincipalId(), cfg.routingKeyEvaluate, queries);
+            SgnlClient.EvaluateResponse res = SgnlClient.evaluate(SgnlClient.currentPrincipalId(), queries);
             return SgnlClient.allAllowed(queries, res);
         } catch (Exception e) {
             logFailure('preflight', e);

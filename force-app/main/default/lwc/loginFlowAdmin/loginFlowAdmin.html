@@ -23,17 +23,19 @@
                 <dl class="slds-list_horizontal slds-wrap">
                     <dt class="slds-item_label slds-text-color_weak">Named Credential</dt>
                     <dd class="slds-item_detail">{cfg.namedCredential}</dd>
-                    <dt class="slds-item_label slds-text-color_weak">API Path</dt>
-                    <dd class="slds-item_detail">{cfg.apiPath}</dd>
+                    <dt class="slds-item_label slds-text-color_weak">Search</dt>
+                    <dd class="slds-item_detail">{cfg.searchPath}</dd>
+                    <dt class="slds-item_label slds-text-color_weak">Evaluations</dt>
+                    <dd class="slds-item_detail">{cfg.evaluationsPath}</dd>
                 </dl>
 
                 <h3 class="slds-text-heading_small slds-m-top_medium slds-m-bottom_x-small">SGNL Provider Hook</h3>
-                <p class="slds-m-bottom_x-small">On the SGNL provider hook, set the application Id path to <code>{cfg.routingKeyPath}</code>, then create two integration assignments for this org's Protected System with these application Ids. They're derived from this org's Id, so a refreshed sandbox gets its own values.</p>
+                <p class="slds-m-bottom_x-small">On your SGNL provider hook, create one integration assignment for this org's Protected System with these values. Leave the route and transform empty. The application Id is this org's Id, so a refreshed sandbox needs its own assignment.</p>
                 <dl class="slds-list_horizontal slds-wrap">
-                    <dt class="slds-item_label slds-text-color_weak">Search (list permission sets)</dt>
-                    <dd class="slds-item_detail">{cfg.routingKeySearch}</dd>
-                    <dt class="slds-item_label slds-text-color_weak">Evaluate (access evaluation)</dt>
-                    <dd class="slds-item_detail">{cfg.routingKeyEvaluate}</dd>
+                    <dt class="slds-item_label slds-text-color_weak">Application Id path</dt>
+                    <dd class="slds-item_detail"><code>{cfg.applicationIdPath}</code></dd>
+                    <dt class="slds-item_label slds-text-color_weak">Application Id</dt>
+                    <dd class="slds-item_detail">{cfg.applicationId}</dd>
                 </dl>
 
                 <h3 class="slds-text-heading_small slds-m-top_medium slds-m-bottom_x-small">Pre-Login Check</h3>
@@ -99,7 +101,7 @@
                     </li>
                     <li class="slds-m-bottom_small">
                         <strong>SGNL provider hook</strong>
-                        <p class="slds-text-body_small">Enter the application Id path and the two application Ids listed under SGNL Provider Hook above.</p>
+                        <p class="slds-text-body_small">Create one integration assignment with the application Id path and application Id listed under SGNL Provider Hook above.</p>
                     </li>
                     <li class="slds-m-bottom_small">
                         <strong>Test Connection</strong><span class={testBadgeClass}>{testLabel}</span>
