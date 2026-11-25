@@ -93,7 +93,7 @@ SGNL accepts 1 to 20 queries per evaluation, so submit sends the selection in ba
 
 ### Picker pages
 
-When more than 10 permission sets are offered, the picker shows 10 at a time with Previous and Next, and a status line with the range and how many are selected. Paging happens in the browser: every option is on the page, rows on other pages are hidden, and their checkboxes are still submitted.
+When more than 10 permission sets are offered, the picker shows 10 at a time with Previous and Next, and a status line with the page, the range and how many are selected. Paging happens in the browser: every option is on the page, rows on other pages are hidden, and their checkboxes are still submitted.
 
 ### Counts in the debug log
 
