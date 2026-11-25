@@ -187,7 +187,7 @@ private class LoginFlowControllerTest {
     @IsTest
     static void init_whenSearchIsTruncated_offersWhatWasRead() {
         useConfig(false);
-        // Every page says there is another, so the client stops at MAX_SEARCH_PAGES
+        // Every page says there is another, so only the platform callout limit ends the search
         SgnlMock m = new SgnlMock(searchBody(new List<Id>{ psId(PS_ASSIGNED) }, 'next-page'), 'Allow');
         Test.setMock(HttpCalloutMock.class, m);
 
@@ -196,9 +196,28 @@ private class LoginFlowControllerTest {
         ctrl.init();
         Test.stopTest();
 
-        Assert.areEqual(SgnlClient.MAX_SEARCH_PAGES, m.searchCalls);
+        Assert.areEqual(Limits.getLimitCallouts(), m.searchCalls);
         Assert.areEqual(1, ctrl.availablePermSets.size(), 'Repeated ids collapse to one option');
         Assert.isNull(ctrl.errorMessage);
+    }
+
+    @IsTest
+    static void init_offersAtMostTheViewStateSafeNumberOfOptions() {
+        useConfig(false);
+        PermissionSet extra = new PermissionSet(Name = 'LFT_Extra', Label = 'LFT Extra', HasActivationRequired = true);
+        insert extra;
+        insert new PermissionSetAssignment(PermissionSetId = extra.Id, AssigneeId = UserInfo.getUserId());
+        LoginFlowController.maxPickerOptions = 1;
+        Test.setMock(HttpCalloutMock.class, new SgnlMock(searchBody(new List<Id>{ psId(PS_ASSIGNED), extra.Id }), 'Allow'));
+
+        Test.startTest();
+        LoginFlowController ctrl = new LoginFlowController();
+        ctrl.init();
+        Test.stopTest();
+
+        Assert.areEqual(1, ctrl.availablePermSets.size());
+        Assert.areEqual(psId(PS_ASSIGNED), ctrl.availablePermSets[0].psId, 'SGNL order is kept');
+        Assert.isNull(ctrl.errorMessage, 'A full picker is not an error');
     }
 
     @IsTest

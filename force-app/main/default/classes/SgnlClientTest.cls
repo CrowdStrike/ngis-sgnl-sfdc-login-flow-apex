@@ -229,20 +229,69 @@ private class SgnlClientTest {
     }
 
     @IsTest
-    static void searchAllowedAssetIds_stopsAtMaxPages() {
-        SequenceMock m = new SequenceMock(new List<String>{
-            page(new List<String>{ 'A' }, 't1'), page(new List<String>{ 'B' }, 't2'),
-            page(new List<String>{ 'C' }, 't3'), page(new List<String>{ 'D' }, null)
-        });
+    static void searchAllowedAssetIds_readsEveryPageUntilThereIsNoToken() {
+        List<String> bodies = new List<String>();
+        for (Integer i = 1; i <= 7; i++) {
+            bodies.add(page(new List<String>{ 'P' + i }, i < 7 ? 't' + i : null));
+        }
+        SequenceMock m = new SequenceMock(bodies);
         Test.setMock(HttpCalloutMock.class, m);
 
         Test.startTest();
         SgnlClient.SearchResult r = SgnlClient.searchAllowedAssetIds('alice@example.com', ASSUME);
         Test.stopTest();
 
-        Assert.areEqual(SgnlClient.MAX_SEARCH_PAGES, m.requests.size());
-        Assert.areEqual(new List<String>{ 'A', 'B', 'C' }, r.assetIds);
+        Assert.areEqual(7, m.requests.size());
+        Assert.areEqual(7, r.assetIds.size());
+        Assert.isFalse(r.truncated);
+    }
+
+    @IsTest
+    static void searchAllowedAssetIds_stopsBeforeTheCalloutLimit() {
+        // Every page says there is another, so only the platform limit ends the loop
+        SequenceMock m = new SequenceMock(new List<String>{ page(new List<String>{ 'A' }, 'more') });
+        Test.setMock(HttpCalloutMock.class, m);
+
+        Test.startTest();
+        SgnlClient.SearchResult r = SgnlClient.searchAllowedAssetIds('alice@example.com', ASSUME);
+        Test.stopTest();
+
+        Assert.areEqual(Limits.getLimitCallouts(), m.requests.size());
         Assert.isTrue(r.truncated);
+        Assert.areEqual('callout limit', r.truncatedReason);
+    }
+
+    @IsTest
+    static void searchAllowedAssetIds_stopsBeforeTheHeapLimit() {
+        SequenceMock m = new SequenceMock(new List<String>{ page(new List<String>{ 'A' }, 'more') });
+        Test.setMock(HttpCalloutMock.class, m);
+        // Allow no heap at all, so the search stops once the first page is read
+        SgnlClient.heapFractionLimit = 0;
+
+        Test.startTest();
+        SgnlClient.SearchResult r = SgnlClient.searchAllowedAssetIds('alice@example.com', ASSUME);
+        Test.stopTest();
+
+        Assert.areEqual(1, m.requests.size(), 'The first page is always read');
+        Assert.isTrue(r.truncated);
+        Assert.areEqual('heap size limit', r.truncatedReason);
+    }
+
+    @IsTest
+    static void searchAllowedAssetIds_stopsBeforeTheCalloutTimeLimit() {
+        SequenceMock m = new SequenceMock(new List<String>{ page(new List<String>{ 'A' }, 'more') });
+        Test.setMock(HttpCalloutMock.class, m);
+        // The search keeps one callout's time free for the pre-login check, so this leaves it none
+        SgnlClient.calloutBudgetMs = SgnlClient.TIMEOUT_MS;
+
+        Test.startTest();
+        SgnlClient.SearchResult r = SgnlClient.searchAllowedAssetIds('alice@example.com', ASSUME);
+        Test.stopTest();
+
+        Assert.areEqual(1, m.requests.size(), 'The first page is always read');
+        Assert.areEqual(new List<String>{ 'A' }, r.assetIds);
+        Assert.isTrue(r.truncated);
+        Assert.areEqual('callout time limit', r.truncatedReason);
     }
 
     @IsTest
@@ -371,6 +420,24 @@ private class SgnlClientTest {
             Assert.isTrue(e.getMessage().contains('callout time limit'), e.getMessage());
         }
         Assert.areEqual(0, m.requests.size());
+    }
+
+    @IsTest
+    static void allAllowedInBatches_stopsBeforeTheCalloutLimit() {
+        // 101 batches of 20 would need more callouts than one transaction may make
+        SequenceMock m = new SequenceMock(new List<String>{ allowAll(20) });
+        Test.setMock(HttpCalloutMock.class, m);
+
+        Test.startTest();
+        try {
+            SgnlClient.allAllowedInBatches('alice@example.com', assumeQueries(2020));
+            Assert.fail('Expected SgnlException');
+        } catch (SgnlClient.SgnlException e) {
+            Assert.isTrue(e.getMessage().contains('callout limit'), e.getMessage());
+        }
+        Test.stopTest();
+
+        Assert.areEqual(Limits.getLimitCallouts(), m.requests.size());
     }
 
     @IsTest

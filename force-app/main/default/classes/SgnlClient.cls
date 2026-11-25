@@ -19,10 +19,9 @@ public with sharing class SgnlClient {
     public static final String  PATH_SEARCH      = '/v1/search/assets';
     public static final Integer TIMEOUT_MS       = 10000;
 
-    // Search is read in pages; the page count is bounded by Apex callout,
-    // heap and view state limits (see DESIGN.md)
+    // Search follows every page SGNL returns. It stops early only at an Apex
+    // limit (callouts, callout time, heap; see DESIGN.md) and reports why.
     public static final Integer SEARCH_PAGE_SIZE = 200;
-    public static final Integer MAX_SEARCH_PAGES = 3;
     public static final String  SEARCH_ENDPOINT  = PATH_SEARCH + '?pageSize=' + SEARCH_PAGE_SIZE;
 
     // SGNL accepts 1 to 20 queries per evaluation request
@@ -35,6 +34,9 @@ public with sharing class SgnlClient {
 
     // Callouts in one transaction share 120 s; batches stop short of that
     @TestVisible private static Long calloutBudgetMs = 110000;
+
+    // The search stops before the heap passes this share of the limit
+    @TestVisible private static Decimal heapFractionLimit = 0.8;
 
     public class SgnlException extends Exception {}
 
@@ -81,10 +83,13 @@ public with sharing class SgnlClient {
         public String               principalId;
     }
 
-    // The allowed asset ids from every page read, and whether SGNL had more
+    // The allowed asset ids from every page read. When an Apex limit stopped
+    // the search before the last page, truncated is set and truncatedReason
+    // names the limit.
     public class SearchResult {
-        public List<String> assetIds  = new List<String>();
-        public Boolean      truncated = false;
+        public List<String> assetIds        = new List<String>();
+        public Boolean      truncated       = false;
+        public String       truncatedReason;
     }
 
     public class EvaluationDecision {
@@ -158,22 +163,48 @@ public with sharing class SgnlClient {
     }
 
     /**
-     * The allowed asset ids from up to MAX_SEARCH_PAGES pages, in response
-     * order. truncated is set when SGNL still had more after the last page.
+     * The allowed asset ids from every page SGNL returns, in response order.
+     * The first page is always read. Before each later page the search checks
+     * the callout count, the callout time and the heap, and stops with
+     * truncated set (and truncatedReason) rather than hit an Apex limit that
+     * would show a raw error page at login.
      */
     public static SearchResult searchAllowedAssetIds(String principalId, String action) {
         SearchResult result = new SearchResult();
+        Long started = System.currentTimeMillis();
         String pageToken = null;
-        for (Integer page = 0; page < MAX_SEARCH_PAGES; page++) {
+        Boolean firstPage = true;
+        while (firstPage || String.isNotBlank(pageToken)) {
+            if (!firstPage) {
+                String reason = searchStopReason(started);
+                if (reason != null) {
+                    result.truncated       = true;
+                    result.truncatedReason = reason;
+                    return result;
+                }
+            }
             SearchResponse res = search(principalId, action, pageToken);
             result.assetIds.addAll(allowedAssetIds(res, action));
             pageToken = res.nextPageToken;
-            if (String.isBlank(pageToken)) {
-                return result;
-            }
+            firstPage = false;
         }
-        result.truncated = true;
         return result;
+    }
+
+    // The Apex limit that forbids another search callout, or null. The time
+    // check keeps one callout's time free for the pre-login check that runs
+    // before the search in the same transaction.
+    private static String searchStopReason(Long started) {
+        if (Limits.getCallouts() >= Limits.getLimitCallouts()) {
+            return 'callout limit';
+        }
+        if (System.currentTimeMillis() - started + TIMEOUT_MS > calloutBudgetMs - TIMEOUT_MS) {
+            return 'callout time limit';
+        }
+        if (Limits.getHeapSize() > Limits.getLimitHeapSize() * heapFractionLimit) {
+            return 'heap size limit';
+        }
+        return null;
     }
 
     /**
@@ -211,7 +242,7 @@ public with sharing class SgnlClient {
      * Evaluates queries in batches of MAX_EVALUATION_QUERIES and returns true
      * only if allAllowed() accepts every batch. Stops at the first rejected
      * batch. Throws SgnlException rather than start a batch that could run
-     * past the transaction's callout time limit.
+     * past the transaction's callout limit or callout time limit.
      */
     public static Boolean allAllowedInBatches(String principalId, List<Query> queries) {
         if (queries == null || queries.isEmpty()) {
@@ -219,6 +250,9 @@ public with sharing class SgnlClient {
         }
         Long started = System.currentTimeMillis();
         for (Integer first = 0; first < queries.size(); first += MAX_EVALUATION_QUERIES) {
+            if (Limits.getCallouts() >= Limits.getLimitCallouts()) {
+                throw new SgnlException('SGNL evaluation stopped before the callout limit');
+            }
             if (System.currentTimeMillis() - started + TIMEOUT_MS > calloutBudgetMs) {
                 throw new SgnlException('SGNL evaluation stopped before the callout time limit');
             }

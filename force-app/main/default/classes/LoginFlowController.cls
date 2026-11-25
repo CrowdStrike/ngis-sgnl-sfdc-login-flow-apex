@@ -30,6 +30,11 @@ public with sharing class LoginFlowController {
     // getCurrentSession() throws "Current session unavailable" in tests
     @TestVisible private static Id sessionIdOverride;
 
+    // Most options the picker holds. The options and offeredIds live in
+    // Visualforce view state (170 KB); at roughly 150 to 200 bytes an option
+    // this stays well under it. Measure in the org before raising it.
+    @TestVisible private static Integer maxPickerOptions = 600;
+
     public LoginFlowController() {
         this.cfg = LoginFlowConfig.getInstance();
         this.availablePermSets       = new List<PermSetOption>();
@@ -61,27 +66,37 @@ public with sharing class LoginFlowController {
             return null; // page shows the error and a Continue button
         }
         if (found.truncated) {
-            Integer readLimit = SgnlClient.SEARCH_PAGE_SIZE * SgnlClient.MAX_SEARCH_PAGES;
-            System.debug(LoggingLevel.WARN, 'SGNL login flow search returned more than ' + readLimit
-                + ' permission sets; offering the first ' + readLimit + '.');
+            System.debug(LoggingLevel.WARN, 'SGNL login flow search stopped at the ' + found.truncatedReason
+                + ' after reading ' + found.assetIds.size() + ' permission sets, and SGNL had more. '
+                + 'Narrow the assumePermissionSet policies.');
         }
         List<Id> sgnlIds = toPermSetIds(found.assetIds);
 
         Map<Id, String> eligible = new Privileged().eligiblePermSets(sgnlIds);
         // Counts for admins: a large gap or a large count suggests a broad policy
         System.debug(LoggingLevel.INFO, 'SGNL login flow: SGNL allowed ' + sgnlIds.size()
-            + ' permission sets; ' + eligible.size() + ' are offered.');
+            + ' permission sets; ' + Math.min(eligible.size(), maxPickerOptions) + ' are offered.');
         if (eligible.isEmpty()) {
             return getFinishUrl(); // nothing to activate, pass through silently
         }
 
-        // Iterate sgnlIds, not the map, to keep SGNL's order in the picker
+        // Iterate sgnlIds, not the map, to keep SGNL's order in the picker.
+        // The options and offeredIds live in view state, so the picker holds
+        // at most maxPickerOptions.
         for (Id psId : sgnlIds) {
+            if (availablePermSets.size() >= maxPickerOptions) {
+                break;
+            }
             if (eligible.containsKey(psId)) {
                 availablePermSets.add(new PermSetOption(psId, eligible.get(psId)));
+                offeredIds.add(psId);
             }
         }
-        offeredIds.addAll(eligible.keySet());
+        if (eligible.size() > availablePermSets.size()) {
+            System.debug(LoggingLevel.WARN, 'SGNL login flow: ' + eligible.size() + ' permission sets are eligible, '
+                + 'but the picker holds ' + maxPickerOptions + ' because of the Visualforce view state limit. '
+                + 'Narrow the assumePermissionSet policies.');
+        }
         return null;
     }
 
