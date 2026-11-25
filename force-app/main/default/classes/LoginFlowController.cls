@@ -1,7 +1,6 @@
 public with sharing class LoginFlowController {
 
     @TestVisible private static final String MSG_LIST_FAILED   = 'Unable to load permission sets right now. You can continue without them.';
-    @TestVisible private static final String MSG_LIST_DENIED   = 'Access denied by SGNL. Contact your administrator.';
     @TestVisible private static final String MSG_NO_SELECTION  = 'Please select at least one permission set, or click "Continue without activating".';
     // Shown on an SGNL deny at submit, or when the selection no longer
     // matches what was offered or assigned. Wording agreed with product.
@@ -53,7 +52,7 @@ public with sharing class LoginFlowController {
         }
 
         // Step 1: ask SGNL which permission sets the user may assume.
-        SgnlClient.ListResponse listed;
+        SgnlClient.SearchResponse listed;
         try {
             listed = SgnlClient.listPermissionSets(SgnlClient.currentPrincipalId(), cfg.routingKeySearch);
         } catch (Exception e) {
@@ -61,11 +60,11 @@ public with sharing class LoginFlowController {
             errorMessage = MSG_LIST_FAILED;
             return null; // page shows the error and a Continue button
         }
-        if (!listed.isAllowed()) {
-            errorMessage = MSG_LIST_DENIED;
-            return null; // page shows the error and a Continue button
+        if (String.isNotBlank(listed.nextPageToken)) {
+            System.debug(LoggingLevel.WARN, 'SGNL login flow search returned more than one page of permission sets; '
+                + 'offering the first page.');
         }
-        List<Id> sgnlIds = toPermSetIds(listed.permissionSetIds);
+        List<Id> sgnlIds = toPermSetIds(SgnlClient.allowedAssetIds(listed, SgnlClient.ACTION_LIST_PERMISSION_SETS));
 
         Map<Id, String> eligible = new Privileged().eligiblePermSets(sgnlIds);
         if (eligible.size() < sgnlIds.size()) {

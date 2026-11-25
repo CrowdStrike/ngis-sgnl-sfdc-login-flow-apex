@@ -51,8 +51,8 @@ Salesforce Screen Flows are the out-of-the-box tool for Login Flows, but they ge
 
 - A Falcon API client (client id and secret) with the `sgnl-access:read` scope.
 - That API client mapped to your SGNL provider.
-- An SGNL provider hook whose application Id path is `{$.context.routingKey}`, with two integration assignments for this org's Protected System:
-  - application Id `<orgid>_search`, routed to search, with a transform that returns `{ "decision": "allow", "permissionSetIds": [...] }`;
+- An SGNL provider hook whose application Id path is `{$.context.routingKey}`, with two integration assignments for this org's Protected System, neither with a transform:
+  - application Id `<orgid>_search`, routed to asset search;
   - application Id `<orgid>_evaluate`, routed to access evaluation.
 
   `<orgid>` is the 15-character Salesforce Org Id. The flow derives both routing keys from the running org, and the admin page and the bootstrap script print them, so there's nothing to type in Salesforce.

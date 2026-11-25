@@ -8,9 +8,10 @@
  *
  * context.org is the plain 15-char Org Id, so policies see the real value.
  * The tenant's SGNL provider hook routes on context.routingKey:
- * "<orgid>_search" goes to a search route whose transform returns
- * { decision, permissionSetIds }, and "<orgid>_evaluate" goes to the access
- * evaluation route, which returns { decisions: [...] }.
+ * "<orgid>_search" goes to the asset search route and "<orgid>_evaluate" to
+ * the access evaluation route. Neither route has a transform, so both return
+ * SGNL's own responses: { decisions, nextPageToken } for search and
+ * { decisions } for evaluation.
  */
 public with sharing class SgnlClient {
 
@@ -55,16 +56,22 @@ public with sharing class SgnlClient {
 
     // ---------------- Response shapes ----------------
     // JSON.deserialize ignores fields not declared here, so SGNL's additional
-    // properties (org, evaluationDuration, issuedAt, ...) are tolerated.
+    // properties (org, assetAttributes, evaluationDuration, issuedAt, ...) are
+    // tolerated.
 
-    // Shape produced by the tenant's search transform, not an SGNL type.
-    public class ListResponse {
-        public String       decision;
-        public List<String> permissionSetIds;
+    public class SearchDecision {
+        public String assetId;
+        public String action;
+        public String decision;
+    }
 
-        public Boolean isAllowed() {
-            return decision != null && decision.equalsIgnoreCase('allow');
-        }
+    // One page of SGNL's asset search response. The provider route doesn't
+    // pass paging parameters, so a non-blank nextPageToken means SGNL had more
+    // allowed assets than this page holds.
+    public class SearchResponse {
+        public List<SearchDecision> decisions;
+        public String               nextPageToken;
+        public String               principalId;
     }
 
     public class EvaluationDecision {
@@ -121,11 +128,37 @@ public with sharing class SgnlClient {
         return new Http().send(req);
     }
 
-    public static ListResponse listPermissionSets(String principalId, String routingKey) {
+    public static SearchResponse listPermissionSets(String principalId, String routingKey) {
         HttpResponse res = sendChecked(principalId, routingKey, new List<Query>{
             new Query(ACTION_LIST_PERMISSION_SETS, null)
         });
-        return (ListResponse) parse(res, ListResponse.class);
+        return (SearchResponse) parse(res, SearchResponse.class);
+    }
+
+    /**
+     * The asset ids in a search response that SGNL allowed for action, in
+     * response order. A decision is kept only if it is Allow, its action is
+     * the requested one or absent, and it has an asset id. Duplicates are
+     * kept; callers that convert to Ids de-duplicate.
+     */
+    public static List<String> allowedAssetIds(SearchResponse res, String action) {
+        List<String> ids = new List<String>();
+        if (res == null || res.decisions == null) {
+            return ids;
+        }
+        for (SearchDecision d : res.decisions) {
+            if (d == null || d.decision == null || !d.decision.equalsIgnoreCase('Allow')) {
+                continue;
+            }
+            if (String.isNotBlank(d.action) && !d.action.equalsIgnoreCase(action)) {
+                continue;
+            }
+            if (String.isBlank(d.assetId)) {
+                continue;
+            }
+            ids.add(d.assetId);
+        }
+        return ids;
     }
 
     public static EvaluateResponse evaluate(String principalId, String routingKey, List<Query> queries) {

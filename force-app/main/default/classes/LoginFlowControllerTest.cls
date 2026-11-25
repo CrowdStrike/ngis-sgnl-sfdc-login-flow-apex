@@ -9,7 +9,7 @@ private class LoginFlowControllerTest {
     // Mock that returns SGNL-shaped responses, routed on the query action.
     // listBody == null or evaluateDecision == null makes that call throw.
     //
-    // List responses use the tenant transform shape {decision, permissionSetIds}.
+    // List responses use SGNL's search response {decisions, nextPageToken}.
     // Evaluate responses echo each query's action/assetId with the configured
     // decision, matching the real AccessEvaluationResponse.
     // ------------------------------------------------------------------
@@ -74,7 +74,23 @@ private class LoginFlowControllerTest {
     }
 
     private static String listBody(List<Id> ids) {
-        return JSON.serialize(new Map<String, Object>{ 'decision' => 'allow', 'permissionSetIds' => ids });
+        return listBody(ids, 'Allow', null);
+    }
+
+    private static String listBody(List<Id> ids, String decision, String nextPageToken) {
+        List<Object> decisions = new List<Object>();
+        for (Id psId : ids) {
+            decisions.add(new Map<String, Object>{
+                'assetId'  => psId,
+                'action'   => SgnlClient.ACTION_LIST_PERMISSION_SETS,
+                'decision' => decision
+            });
+        }
+        Map<String, Object> body = new Map<String, Object>{ 'decisions' => decisions };
+        if (nextPageToken != null) {
+            body.put('nextPageToken', nextPageToken);
+        }
+        return JSON.serialize(body);
     }
 
     private static void useConfig(Boolean preLoginEnabled) {
@@ -154,17 +170,31 @@ private class LoginFlowControllerTest {
     }
 
     @IsTest
-    static void init_whenListDenied_setsError() {
+    static void init_whenSgnlDeniesEverySet_passesThrough() {
         useConfig(false);
-        Test.setMock(HttpCalloutMock.class, new SgnlMock('{"decision":"deny","permissionSetIds":[]}', 'Allow'));
+        Test.setMock(HttpCalloutMock.class, new SgnlMock(listBody(new List<Id>{ psId(PS_ASSIGNED) }, 'Deny', null), 'Allow'));
 
         Test.startTest();
         LoginFlowController ctrl = new LoginFlowController();
         ctrl.init();
         Test.stopTest();
 
-        Assert.areEqual(LoginFlowController.MSG_LIST_DENIED, ctrl.errorMessage);
-        Assert.areEqual(0, ctrl.availablePermSets.size());
+        Assert.areEqual(0, ctrl.availablePermSets.size(), 'A Deny decision must not be offered');
+        Assert.isNull(ctrl.errorMessage, 'Nothing allowed is not an error');
+    }
+
+    @IsTest
+    static void init_withMorePages_offersTheFirstPage() {
+        useConfig(false);
+        Test.setMock(HttpCalloutMock.class, new SgnlMock(listBody(new List<Id>{ psId(PS_ASSIGNED) }, 'Allow', 'page-2'), 'Allow'));
+
+        Test.startTest();
+        LoginFlowController ctrl = new LoginFlowController();
+        ctrl.init();
+        Test.stopTest();
+
+        Assert.areEqual(1, ctrl.availablePermSets.size());
+        Assert.isNull(ctrl.errorMessage);
     }
 
     @IsTest

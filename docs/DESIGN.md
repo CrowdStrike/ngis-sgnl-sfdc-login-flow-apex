@@ -53,7 +53,7 @@ That value lives in its own key, `routingKey`, so `org` stays the real Org Id in
 
 The suffix is hidden from admins. `LoginFlowConfig` always derives both routing keys from the running org; there is no override. The admin page and the bootstrap script print the application Id path and the exact application Ids for the SGNL side. An override could only disagree with the provider hook, and a sandbox refresh copies config records, so a production override would point a refreshed sandbox at production's Protected System.
 
-The list response (`{ "decision": "allow", "permissionSetIds": [...] }`) is not an SGNL type. It comes from a custom transform template on the tenant's search route, which returns at most 1000 results and doesn't paginate. The evaluate response (`assumePermissionSet` and pre-login) is SGNL's `AccessEvaluationResponse`: `decisions[]` plus `principalId`, with `action` and `assetId` optional on each decision. `SgnlClient` deserializes both into typed classes; fields it doesn't model are ignored, and a type mismatch is wrapped as `SgnlException`.
+Neither route has a transform, so both responses are SGNL's own types. The list response is SGNL's asset search response: `decisions[]`, each with `assetId`, `action` and `decision`, plus `nextPageToken` and `principalId`. The flow offers a permission set only for a decision that is `Allow`, has an `assetId`, and has the action `listPermissionSets` or none. The provider route returns one page of up to 1000 allowed assets and doesn't take paging parameters, so the flow reads that page only and logs a warning when `nextPageToken` is set. The evaluate response (`assumePermissionSet` and pre-login) is SGNL's `AccessEvaluationResponse`: `decisions[]` plus `principalId`, with `action` and `assetId` optional on each decision. `SgnlClient` deserializes both into typed classes; fields it doesn't model are ignored, and a type mismatch is wrapped as `SgnlException`.
 
 ### Decision matching
 
@@ -63,7 +63,7 @@ The list response (`{ "decision": "allow", "permissionSetIds": [...] }`) is not 
 - every `decision` is `Allow`, compared case-insensitively;
 - any `action` or `assetId` a decision echoes back matches the query at the same index. Asset ids compare as `Id`, so 15- and 18-character forms match.
 
-The list call compares `decision` to `allow` case-insensitively too, since its shape comes from tenant configuration.
+The list call compares `decision` to `Allow` case-insensitively too.
 
 A partial deny at submit activates nothing, by product decision. SGNL returns one decision per query in order, so a partial grant would be safe, but the list and submit calls are seconds apart, so a deny between them means the user's access changed. The message asks them to sign out and log in again to have it re-evaluated, or continue without activating.
 

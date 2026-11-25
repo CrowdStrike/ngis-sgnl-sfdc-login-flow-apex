@@ -16,7 +16,7 @@ private class LoginFlowAdminControllerTest {
             }
             HttpResponse res = new HttpResponse();
             res.setStatusCode(status);
-            res.setBody('{"decision":"allow","permissionSetIds":[]}');
+            res.setBody('{"decisions":[]}');
             return res;
         }
     }

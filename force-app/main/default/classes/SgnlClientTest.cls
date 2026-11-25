@@ -69,21 +69,23 @@ private class SgnlClientTest {
 
     @IsTest
     static void listPermissionSets_success() {
-        Mock m = new Mock(200, '{"decision":"allow","permissionSetIds":["' + PS_15 + '"],"principalId":"alice@example.com"}');
+        Mock m = new Mock(200, '{"decisions":[{"assetId":"' + PS_15 + '","action":"listPermissionSets","decision":"Allow"}],'
+            + '"nextPageToken":"page-2","principalId":"alice@example.com"}');
         Test.setMock(HttpCalloutMock.class, m);
 
         Test.startTest();
-        SgnlClient.ListResponse res = SgnlClient.listPermissionSets('alice@example.com', 'org_search');
+        SgnlClient.SearchResponse res = SgnlClient.listPermissionSets('alice@example.com', 'org_search');
         Test.stopTest();
 
-        Assert.isTrue(res.isAllowed());
-        Assert.areEqual(1, res.permissionSetIds.size());
-        Assert.areEqual(PS_15, res.permissionSetIds[0]);
+        Assert.areEqual(1, res.decisions.size());
+        Assert.areEqual(PS_15, res.decisions[0].assetId);
+        Assert.areEqual('page-2', res.nextPageToken);
+        Assert.areEqual(new List<String>{ PS_15 }, SgnlClient.allowedAssetIds(res, SgnlClient.ACTION_LIST_PERMISSION_SETS));
     }
 
     @IsTest
     static void listPermissionSets_sendsExpectedRequest() {
-        Mock m = new Mock(200, '{"decision":"allow","permissionSetIds":[]}');
+        Mock m = new Mock(200, '{"decisions":[]}');
         Test.setMock(HttpCalloutMock.class, m);
 
         Test.startTest();
@@ -104,11 +106,40 @@ private class SgnlClientTest {
         Assert.isFalse(query.containsKey('assetId'), 'Null assetId must be omitted');
     }
 
+    // ---------------- allowedAssetIds ----------------
+
+    private static SgnlClient.SearchResponse searchResponse(String body) {
+        return (SgnlClient.SearchResponse) JSON.deserialize(body, SgnlClient.SearchResponse.class);
+    }
+
     @IsTest
-    static void listPermissionSets_lowercaseAndTitleCaseAllow() {
-        Assert.isTrue(((SgnlClient.ListResponse) JSON.deserialize('{"decision":"Allow"}', SgnlClient.ListResponse.class)).isAllowed());
-        Assert.isFalse(((SgnlClient.ListResponse) JSON.deserialize('{"decision":"deny"}', SgnlClient.ListResponse.class)).isAllowed());
-        Assert.isFalse(((SgnlClient.ListResponse) JSON.deserialize('{}', SgnlClient.ListResponse.class)).isAllowed());
+    static void allowedAssetIds_keepsAllowInResponseOrder() {
+        SgnlClient.SearchResponse res = searchResponse('{"decisions":['
+            + '{"assetId":"0PS000000000002","action":"listPermissionSets","decision":"Allow"},'
+            + '{"assetId":"' + PS_15 + '","action":"listPermissionSets","decision":"allow"}]}');
+        Assert.areEqual(new List<String>{ '0PS000000000002', PS_15 },
+            SgnlClient.allowedAssetIds(res, SgnlClient.ACTION_LIST_PERMISSION_SETS));
+    }
+
+    @IsTest
+    static void allowedAssetIds_dropsDenyBlankAssetIdAndOtherActions() {
+        SgnlClient.SearchResponse res = searchResponse('{"decisions":['
+            + '{"assetId":"0PS000000000002","action":"listPermissionSets","decision":"Deny"},'
+            + '{"action":"listPermissionSets","decision":"Allow"},'
+            + '{"assetId":"","action":"listPermissionSets","decision":"Allow"},'
+            + '{"assetId":"0PS000000000003","action":"assumePermissionSet","decision":"Allow"},'
+            + '{"assetId":"0PS000000000004","action":"listPermissionSets"},'
+            + '{"assetId":"' + PS_15 + '","decision":"Allow"}]}');
+        Assert.areEqual(new List<String>{ PS_15 },
+            SgnlClient.allowedAssetIds(res, SgnlClient.ACTION_LIST_PERMISSION_SETS),
+            'Only Allow decisions with an asset id and the requested (or no) action are kept');
+    }
+
+    @IsTest
+    static void allowedAssetIds_emptyInputs() {
+        Assert.areEqual(0, SgnlClient.allowedAssetIds(null, SgnlClient.ACTION_LIST_PERMISSION_SETS).size());
+        Assert.areEqual(0, SgnlClient.allowedAssetIds(searchResponse('{}'), SgnlClient.ACTION_LIST_PERMISSION_SETS).size());
+        Assert.areEqual(0, SgnlClient.allowedAssetIds(searchResponse('{"decisions":[]}'), SgnlClient.ACTION_LIST_PERMISSION_SETS).size());
     }
 
     @IsTest
