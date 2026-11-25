@@ -108,7 +108,10 @@
                                     <div id="ngis-permset-pager" class="slds-m-bottom_medium" style="display: none;">
                                         <button type="button" id="ngis-permset-prev" class="slds-button slds-button_neutral">Previous</button>
                                         <button type="button" id="ngis-permset-next" class="slds-button slds-button_neutral slds-m-left_x-small">Next</button>
-                                        <p id="ngis-permset-status" class="slds-text-body_regular slds-m-top_x-small" aria-live="polite"></p>
+                                        <div id="ngis-permset-status" class="slds-m-top_x-small" aria-live="polite">
+                                            <p id="ngis-permset-page" class="slds-text-body_regular"></p>
+                                            <p id="ngis-permset-count" class="slds-text-body_regular"></p>
+                                        </div>
                                     </div>
 
                                     <!-- Shows 10 options at a time. Rows on other pages are hidden with
@@ -121,7 +124,8 @@
                                             if (!pager || rows.length <= PAGE_SIZE) { return; }
                                             var prev = document.getElementById('ngis-permset-prev');
                                             var next = document.getElementById('ngis-permset-next');
-                                            var status = document.getElementById('ngis-permset-status');
+                                            var pageLabel = document.getElementById('ngis-permset-page');
+                                            var countLabel = document.getElementById('ngis-permset-count');
                                             var pages = Math.ceil(rows.length / PAGE_SIZE);
                                             var page = 0;
                                             function render() {
@@ -134,7 +138,8 @@
                                                     }
                                                 }
                                                 var noun = selected === 1 ? 'permission set' : 'permission sets';
-                                                status.textContent = 'Page ' + (page + 1) + ' of ' + pages + '. ' + selected + ' ' + noun + ' selected.';
+                                                pageLabel.textContent = 'Page ' + (page + 1) + ' of ' + pages;
+                                                countLabel.textContent = selected + ' ' + noun + ' selected';
                                                 prev.disabled = page === 0;
                                                 next.disabled = page === pages - 1;
                                             }
