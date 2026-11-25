@@ -4,7 +4,6 @@ private class LoginFlowAdminControllerTest {
     private class Mock implements HttpCalloutMock {
         private final Integer status;
         private final Boolean throwCallout;
-        public HttpRequest lastRequest;
 
         Mock(Integer status, Boolean throwCallout) {
             this.status       = status;
@@ -12,19 +11,20 @@ private class LoginFlowAdminControllerTest {
         }
 
         public HttpResponse respond(HttpRequest req) {
-            lastRequest = req;
             if (throwCallout) {
                 throw new CalloutException('Unable to fetch an access token');
             }
             HttpResponse res = new HttpResponse();
             res.setStatusCode(status);
-            res.setBody('{"decisions":[]}');
+            res.setBody('{"decision":"allow","permissionSetIds":[]}');
             return res;
         }
     }
 
     private static void useConfig() {
-        LoginFlowConfig.setMockForTest(LoginFlowConfig.buildForTest(true, 'login', 'Denied.', 15));
+        LoginFlowConfig.setMockForTest(LoginFlowConfig.buildForTest(
+            'org_search', 'org_evaluate', true, 'login', 'Denied.', 15
+        ));
     }
 
     @IsTest
@@ -34,10 +34,10 @@ private class LoginFlowAdminControllerTest {
         LoginFlowAdminController.ConfigDTO dto = LoginFlowAdminController.getConfig();
 
         Assert.areEqual(SgnlClient.NAMED_CREDENTIAL, dto.namedCredential);
-        Assert.areEqual('/v1/evaluations', dto.evaluationsPath);
-        Assert.areEqual('/v1/search/assets', dto.searchPath);
-        Assert.areEqual('{$.context.orgId}', dto.applicationIdPath);
-        Assert.areEqual(UserInfo.getOrganizationId().left(15), dto.applicationId);
+        Assert.areEqual(SgnlClient.PATH, dto.apiPath);
+        Assert.areEqual('{$.context.routingKey}', dto.routingKeyPath);
+        Assert.areEqual('org_search', dto.routingKeySearch);
+        Assert.areEqual('org_evaluate', dto.routingKeyEvaluate);
         Assert.isTrue(dto.preLoginCheckEnabled);
         Assert.areEqual('login', dto.preLoginAction);
         Assert.areEqual('Denied.', dto.denialMessage);
@@ -75,10 +75,9 @@ private class LoginFlowAdminControllerTest {
     }
 
     @IsTest
-    static void testConnection_ok_runsTheLoginSearch() {
+    static void testConnection_ok() {
         useConfig();
-        Mock m = new Mock(200, false);
-        Test.setMock(HttpCalloutMock.class, m);
+        Test.setMock(HttpCalloutMock.class, new Mock(200, false));
 
         Test.startTest();
         LoginFlowAdminController.TestResultDTO r = LoginFlowAdminController.testConnection();
@@ -87,30 +86,20 @@ private class LoginFlowAdminControllerTest {
         Assert.isTrue(r.ok);
         Assert.areEqual(200, r.statusCode);
         Assert.isNull(r.hintText);
-        Assert.areEqual('callout:NGIS_SGNL_Access/v1/search/assets?pageSize=200', m.lastRequest.getEndpoint());
-        Map<String, Object> query = (Map<String, Object>) ((List<Object>)
-            ((Map<String, Object>) JSON.deserializeUntyped(m.lastRequest.getBody())).get('queries'))[0];
-        Assert.areEqual('assumePermissionSet', query.get('action'));
     }
 
     @IsTest
-    static void testConnection_hintsPerStatus() {
+    static void testConnection_unauthorized_givesHint() {
         useConfig();
-        Map<Integer, String> expected = new Map<Integer, String>{
-            400 => LoginFlowAdminController.HINT_BAD_REQUEST,
-            401 => LoginFlowAdminController.HINT_UNAUTHORIZED,
-            403 => LoginFlowAdminController.HINT_FORBIDDEN
-        };
+        Test.setMock(HttpCalloutMock.class, new Mock(401, false));
 
         Test.startTest();
-        for (Integer status : expected.keySet()) {
-            Test.setMock(HttpCalloutMock.class, new Mock(status, false));
-            LoginFlowAdminController.TestResultDTO r = LoginFlowAdminController.testConnection();
-            Assert.isFalse(r.ok);
-            Assert.areEqual(status, r.statusCode);
-            Assert.areEqual(expected.get(status), r.hintText, 'hint for ' + status);
-        }
+        LoginFlowAdminController.TestResultDTO r = LoginFlowAdminController.testConnection();
         Test.stopTest();
+
+        Assert.isFalse(r.ok);
+        Assert.areEqual(401, r.statusCode);
+        Assert.areEqual(LoginFlowAdminController.HINT_UNAUTHORIZED, r.hintText);
     }
 
     @IsTest

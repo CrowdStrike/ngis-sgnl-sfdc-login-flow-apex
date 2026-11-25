@@ -17,12 +17,12 @@ A Salesforce Login Flow is a Visualforce page (or Screen Flow) that Salesforce i
 
 ## Authentication: Falcon OAuth2 client credentials
 
-The flow calls SGNL through the CrowdStrike access API: `https://access.<cloud>.crowdstrike.com`, at `/v1/search/assets` and `/v1/evaluations`, behind the CrowdStrike authorizer. The authorizer accepts Falcon OAuth2 access tokens issued by `https://api.<cloud>.crowdstrike.com/oauth2/token` for an API client with the `sgnl-access:read` scope, and resolves the token to the SGNL provider the client is mapped to.
+The flow calls SGNL through the CrowdStrike access API: `https://access.<cloud>.crowdstrike.com/v1/providers`, behind the CrowdStrike authorizer. The authorizer accepts Falcon OAuth2 access tokens issued by `https://api.<cloud>.crowdstrike.com/oauth2/token` for an API client with the `sgnl-access:read` scope, and resolves the token to the SGNL provider the client is mapped to.
 
 Salesforce handles the token entirely:
 
 - `NGIS_SGNL_Falcon_OAuth` (External Credential) uses protocol `Oauth`, variant `ClientCredentialsClientSecret`. That variant sends `client_id`/`client_secret` in the token request body, which is what Falcon expects. (`ClientCredentialsClientSecretBasic` would send them in an Authorization header instead.)
-- Salesforce fetches, caches and refreshes the token. Apex only calls `callout:NGIS_SGNL_Access/v1/search/assets` and `callout:NGIS_SGNL_Access/v1/evaluations`.
+- Salesforce fetches, caches and refreshes the token. Apex only does `callout:NGIS_SGNL_Access/v1/providers`.
 - The client id and secret live on the `NGIS_SGNL_Principal` Named Principal. Metadata API can't carry them, which keeps them out of source; the bootstrap script sets them through the Connect API (`/services/data/vXX.X/named-credentials/credential/`).
 
 ### Why the credentials are in their own package directory
@@ -31,7 +31,7 @@ The access and token hosts differ per Falcon cloud. If the Named Credential and 
 
 ### What the token does and doesn't prove
 
-The token identifies the Salesforce org (one API client per org), not the user. SGNL does not compare `principal.id` in the body to anything in the token. So any code in the org that can make the callout can ask SGNL about any principal mapped to the provider. This is the same model as the CrowdStrike GitHub policy action, which also asserts the principal in the body. The same holds for `context.orgId`: SGNL matches it against the provider hook's assignments, so code that can make the callout can name another org on the same provider hook. The flow itself always sends the running org's Id, and no configuration changes it. The exposure is bounded by:
+The token identifies the Salesforce org (one API client per org), not the user. SGNL does not compare `principal.id` in the body to anything in the token. So any code in the org that can make the callout can ask SGNL about any principal mapped to the provider. This is the same model as the CrowdStrike GitHub policy action, which also asserts the principal in the body. The exposure is bounded by:
 
 - Only users with External Credential principal access can make the callout: users on the flow's profile, and admins with `NGIS_SGNL_Login_Flow_Admin`.
 - Running arbitrary callouts needs Author Apex.
@@ -41,63 +41,19 @@ The token identifies the Salesforce org (one API client per org), not the user. 
 
 ---
 
-## How the flow calls SGNL
+## SGNL request and response shapes
 
-Every call is a `POST` through the `NGIS_SGNL_Access` Named Credential:
+Both calls are `POST /v1/providers` with `context: { org, routingKey }`. `org` is the plain 15-character Org Id. The tenant's SGNL provider hook reads `{$.context.routingKey}`: one integration assignment matches `<orgid>_search` and routes to search, another matches `<orgid>_evaluate` and routes to access evaluation. No SGNL code knows the `_search`/`_evaluate` suffixes; they're tenant configuration. SGNL also copies `context` keys into policy fields, which is why each evaluation decision echoes `"org"`.
 
-| Call | Endpoint | Queries |
-|---|---|---|
-| List permission sets (page load) | `/v1/search/assets?pageSize=200`, plus `&pageToken=` for later pages | one: `assumePermissionSet` |
-| Validate the selection (submit) | `/v1/evaluations`, in batches of 20 | one `assumePermissionSet` per selected set, with its `assetId` |
-| Pre-login check | `/v1/evaluations` | one: the configured action |
+### Why there's a separate routing key
 
-Every request has the same shape:
+`/v1/providers` is a single URL, so the request body has to tell SGNL which route to use. Each integration assignment matches one value read from one JSON path, carries one route, and its application Id must be unique within the provider hook. Each org needs two routes, so it needs two assignments and two distinct values. Matching on the plain Org Id would give one route per org, and matching on a bare `search`/`evaluate` field would give one org per provider hook. So the matched value has to combine both: `<orgid>_search` / `<orgid>_evaluate`.
 
-```json
-{
-  "principal": { "id": "<username>" },
-  "queries":   [ { "action": "assumePermissionSet", "assetId": "0PS..." } ],
-  "context":   { "orgId": "<15-character Org Id>" }
-}
-```
+That value lives in its own key, `routingKey`, so `org` stays the real Org Id in policies and logs.
 
-### How SGNL picks the Protected System
+The suffix is hidden from admins. `LoginFlowConfig` always derives both routing keys from the running org; there is no override. The admin page and the bootstrap script print the application Id path and the exact application Ids for the SGNL side. An override could only disagree with the provider hook, and a sandbox refresh copies config records, so a production override would point a refreshed sandbox at production's Protected System.
 
-The token identifies a Falcon API client. SGNL maps the client to a provider hook, reads `{$.context.orgId}` from the request body, and matches it against the provider hook's integration assignments. The matching assignment names the Protected System the request is evaluated against. The assignment has no route or transform: the endpoint the flow calls decides whether the request is a search or an evaluation.
-
-`context.orgId` is always `UserInfo.getOrganizationId().left(15)`, set in `SgnlClient.send()`. A refreshed sandbox sends its own Id. The value must stay inside `context`: SGNL matches against its parsed copy of the request, which keeps only the fields its request schema declares, and `context` is a free-form map. SGNL also copies `context` keys into policy fields, so policies can read `orgId`.
-
-If another assignment on the same provider hook uses a path the request doesn't carry, SGNL can reject the request with HTTP 400 "The path to the application ID is not found in the request body."
-
-### Search
-
-Search returns SGNL's search response: `decisions[]`, each with `assetId`, `action`, `decision` and the asset's attributes, plus `nextPageToken` when more results exist. SGNL returns only allowed assets. `SgnlClient.allowedAssetIds()` keeps a decision only if it is `Allow` (case-insensitive), its `action` is `assumePermissionSet` or absent, and its `assetId` isn't blank. The `assetId` is the permission set Id. `SgnlClient` doesn't model the attributes, so they aren't kept.
-
-Search and submit ask about the same action, so the picker offers the sets a submit would allow unless access changes in between.
-
-### Search paging
-
-The flow reads pages of 200, sending the same body with each page's `nextPageToken`, until SGNL returns no token. It always reads the first page. Before each later page it checks three Apex limits and stops early, with a warning in the debug log, instead of hitting one:
-
-- Callouts: one transaction can make 100. The flow stops when it has used them all.
-- Callout time: callouts in one transaction share 120 seconds, and each has a 10-second timeout. The flow stops when another page could run past 110 seconds, and keeps one callout's time free for the pre-login check, which runs first.
-- Heap: a synchronous transaction has 6 MB, and a heap overrun can't be caught, so it would show a raw error page at login. The flow stops when the heap passes 80% of the limit. Each decision carries the asset's attributes, which `SgnlClient` doesn't keep, so pages of 200 are small.
-
-When the flow stops early, it offers the sets it read and logs `SGNL login flow search stopped at the <limit> after reading N permission sets, and SGNL had more.`
-
-The picker's options and the list of offered ids live in view state, which is capped at 170 KB. The picker therefore holds at most 600 options, about 100 to 120 KB at roughly 150 to 200 bytes an option. If more are eligible, the flow logs `SGNL login flow: N permission sets are eligible, but the picker holds 600 because of the Visualforce view state limit.`
-
-### Submit batches
-
-SGNL accepts 1 to 20 queries per evaluation, so submit sends the selection in batches of 20, one after another. Approval is all or nothing: the first batch that isn't all Allow, or any failure, stops the loop and nothing is activated. Before each batch, the flow checks the callouts used and the time spent so far; if another batch could run past the callout limit (100 per transaction) or the callout time limit, it stops, logs the reason, and shows "Unable to verify your selection" instead.
-
-### Picker pages
-
-When more than 10 permission sets are offered, the picker shows 10 at a time with Previous and Next, and a status line with the page and how many permission sets are selected. Paging happens in the browser: every option is on the page, rows on other pages are hidden, and their checkboxes are still submitted.
-
-### Counts in the debug log
-
-Each page load logs how many permission sets SGNL allowed and how many are offered (`SGNL login flow: SGNL allowed N permission sets; M are offered.`). Each submit logs how many were selected. A large gap or a large count suggests a policy that's broader than it needs to be.
+The list response (`{ "decision": "allow", "permissionSetIds": [...] }`) is not an SGNL type. It comes from a custom transform template on the tenant's search route, which returns at most 1000 results and doesn't paginate. The evaluate response (`assumePermissionSet` and pre-login) is SGNL's `AccessEvaluationResponse`: `decisions[]` plus `principalId`, with `action` and `assetId` optional on each decision. `SgnlClient` deserializes both into typed classes; fields it doesn't model are ignored, and a type mismatch is wrapped as `SgnlException`.
 
 ### Decision matching
 
@@ -107,7 +63,7 @@ Each page load logs how many permission sets SGNL allowed and how many are offer
 - every `decision` is `Allow`, compared case-insensitively;
 - any `action` or `assetId` a decision echoes back matches the query at the same index. Asset ids compare as `Id`, so 15- and 18-character forms match.
 
-Submit applies it to each batch.
+The list call compares `decision` to `allow` case-insensitively too, since its shape comes from tenant configuration.
 
 A partial deny at submit activates nothing, by product decision. SGNL returns one decision per query in order, so a partial grant would be safe, but the list and submit calls are seconds apart, so a deny between them means the user's access changed. The message asks them to sign out and log in again to have it re-evaluated, or continue without activating.
 
@@ -120,7 +76,7 @@ Every SGNL path in the controller catches all exceptions: `SgnlException` (non-2
 | Path | On failure |
 |------|------------|
 | Pre-login check | Deny (fail closed) |
-| Search (`/v1/search/assets`) | Error banner; user can continue without permission sets |
+| `listPermissionSets` | Error banner; user can continue without permission sets |
 | `assumePermissionSet` | Stay on the page with an error |
 | `SessionPermSetActivation` insert | Stay on the page with an error |
 
@@ -150,7 +106,7 @@ Runtime settings live in `LoginFlow_Config__mdt.Default`; `LoginFlowConfig.cls` 
 
 Every field is optional. The pre-login check defaults to off, the action to `login`, the denial delay to 10 seconds (clamped to 1 to 600).
 
-The provider hook application Id isn't configurable: it's always `UserInfo.getOrganizationId().left(15)`. A fresh org works with no record, and a sandbox refresh can't carry production's value over. See "How SGNL picks the Protected System" above.
+The routing keys are not configurable: they're always `UserInfo.getOrganizationId().left(15)` plus `_search` / `_evaluate`. A fresh org works with no record, and a sandbox refresh can't carry production's routing values over. See "Why there's a separate routing key" above.
 
 The Named Credential name and API path are constants in `SgnlClient`, not configuration, so anyone who can edit the config can't point the login flow at a different Named Credential.
 
@@ -232,7 +188,7 @@ Salesforce lets a user activate their own assigned session permission sets with 
 
 - Read-only: the saved values (blank fields labeled with the default they fall back to), whether a `Default` record exists, and an **Edit in Setup** link to the record's edit form.
 - A setup checklist: client credentials, SGNL provider hook, Test Connection, attaching the Login Flow. The credential status comes from `ConnectApi.NamedCredentials.getCredential()` for the `NGIS_SGNL_Principal` principal. If the status can't be read, for example because the admin lacks the permission it needs, the page shows Unknown and stays usable. Apex can't tell whether a profile has the Login Flow attached, so that step is instructions and a link only.
-- **Test Connection** runs the first page of a login's search, as the admin. It never throws: callout failures (including token-fetch failures) return `statusCode: 0` with the exception text and a hint; 400, 401 and 403 get hints: an assignment on another path, the provider hook mapping and assignment, and the scope. It tests the saved configuration, not anything typed on the page.
+- **Test Connection** fires a live `listPermissionSets` call as the admin. It never throws: callout failures (including token-fetch failures) return `statusCode: 0` with the exception text and a hint; 401/403 get a hint about the API client's scope and provider mapping. It tests the saved configuration, not anything typed on the page.
 - The admin needs External Credential principal access because Test Connection calls out as them; `NGIS_SGNL_Login_Flow_Admin` grants it along with the app and tab.
 
 ---
