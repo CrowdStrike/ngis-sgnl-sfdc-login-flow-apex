@@ -133,9 +133,8 @@
                                                         if (box.checked) { selected++; }
                                                     }
                                                 }
-                                                var first = page * PAGE_SIZE + 1;
-                                                var last = Math.min((page + 1) * PAGE_SIZE, rows.length);
-                                                status.textContent = 'Page ' + (page + 1) + ' of ' + pages + '. Showing ' + first + ' to ' + last + ' of ' + rows.length + '. ' + selected + ' selected.';
+                                                var noun = selected === 1 ? 'Permission Set' : 'Permission Sets';
+                                                status.textContent = 'Page ' + (page + 1) + ' of ' + pages + '. ' + selected + ' ' + noun + ' selected.';
                                                 prev.disabled = page === 0;
                                                 next.disabled = page === pages - 1;
                                             }
