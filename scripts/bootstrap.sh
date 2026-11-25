@@ -261,17 +261,20 @@ for i in "${!PROFILE_IDS[@]}"; do
   PROFILE_API_NAMES+=("$API_NAME")
 done
 
-# The flow sends the 15-char Org Id as context.orgId; the SGNL admin enters it
-# as the application Id of the provider hook's integration assignment.
+# The flow sends <15-char Org Id>_search / _evaluate as context.routingKey;
+# the SGNL admin needs both values for the provider hook's integration
+# assignments.
 ORG_ID="$(sf data query \
   --target-org "$ORG_ALIAS" \
   --query "SELECT Id FROM Organization LIMIT 1" \
   --json 2>/dev/null | jq -r '.result.records[0].Id // empty')"
 if [[ "$ORG_ID" =~ ^00D[A-Za-z0-9]{12}([A-Za-z0-9]{3})?$ ]]; then
-  APPLICATION_ID="${ORG_ID:0:15}"
+  CONTEXT_ORG_SEARCH="${ORG_ID:0:15}_search"
+  CONTEXT_ORG_EVALUATE="${ORG_ID:0:15}_evaluate"
 else
   warn "Could not read the Org Id; the admin page shows the SGNL provider hook values."
-  APPLICATION_ID="(see the admin page)"
+  CONTEXT_ORG_SEARCH="(see the admin page)"
+  CONTEXT_ORG_EVALUATE="(see the admin page)"
 fi
 
 # -----------------------------------------------------------------------------
@@ -562,10 +565,12 @@ TEST_PASSED=false
 [[ -z "$CLIENT_ID" ]] && info "No client credentials entered on this run; testing the ones saved in the org, if any."
 cat <<EOF
 Test Connection calls SGNL as you. It passes only after the SGNL provider
-hook has an integration assignment for this org's Protected System with:
-  Application Id path: {\$.context.orgId}
-  Application Id:      $APPLICATION_ID
-No route or transform is needed.
+hook has the application Id path {\$.context.routingKey} and two integration
+assignments for this org's Protected System:
+  Search (list permission sets, with the permission set transform):
+    $CONTEXT_ORG_SEARCH
+  Evaluate (access evaluation):
+    $CONTEXT_ORG_EVALUATE
 
 EOF
 prompt "Run Test Connection now? [Y/n]: "
@@ -749,10 +754,13 @@ ${c_green}${c_bold}Login flow bootstrapped.${c_reset}
 
 Next steps:
 
-  1. On the SGNL provider hook, create one integration assignment for
-     this org's Protected System, with no route or transform:
-       Application Id path: {\$.context.orgId}
-       Application Id:      $APPLICATION_ID
+  1. On the SGNL provider hook, set the application Id path to
+     {\$.context.routingKey}, then create two integration assignments for
+     this org's Protected System, with these application Ids:
+       Search (list permission sets, with the permission set transform):
+         $CONTEXT_ORG_SEARCH
+       Evaluate (access evaluation):
+         $CONTEXT_ORG_EVALUATE
      The admin page shows the same values.
 
 $TEST_STEP
