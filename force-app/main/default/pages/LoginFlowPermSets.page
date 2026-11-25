@@ -108,7 +108,7 @@
                                     <div id="ngis-permset-pager" class="slds-m-bottom_medium" style="display: none;">
                                         <button type="button" id="ngis-permset-prev" class="slds-button slds-button_neutral">Previous</button>
                                         <button type="button" id="ngis-permset-next" class="slds-button slds-button_neutral slds-m-left_x-small">Next</button>
-                                        <p id="ngis-permset-status" class="slds-text-body_small slds-text-color_weak slds-m-top_x-small" aria-live="polite"></p>
+                                        <p id="ngis-permset-status" class="slds-text-body_regular slds-m-top_x-small" aria-live="polite"></p>
                                     </div>
 
                                     <!-- Shows 10 options at a time. Rows on other pages are hidden with
@@ -133,7 +133,7 @@
                                                         if (box.checked) { selected++; }
                                                     }
                                                 }
-                                                var noun = selected === 1 ? 'Permission Set' : 'Permission Sets';
+                                                var noun = selected === 1 ? 'permission set' : 'permission sets';
                                                 status.textContent = 'Page ' + (page + 1) + ' of ' + pages + '. ' + selected + ' ' + noun + ' selected.';
                                                 prev.disabled = page === 0;
                                                 next.disabled = page === pages - 1;
