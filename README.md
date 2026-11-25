@@ -13,7 +13,7 @@ Salesforce Screen Flows are the out-of-the-box tool for Login Flows, but they ge
 ### What it does
 
 1. **Optional pre-login check.** If enabled, evaluates a configured SGNL action (default `login`). On deny, or if SGNL can't be reached, the user sees a denial message and is signed out.
-2. **Fetches available permission sets.** Searches SGNL for the permission sets the user may assume (`action: assumePermissionSet`), reading up to 600. SGNL returns the Salesforce Permission Set Ids it allows.
+2. **Fetches available permission sets.** Searches SGNL for the permission sets the user may assume (`action: assumePermissionSet`), following every page of results. SGNL returns the Salesforce Permission Set Ids it allows.
 3. **Filters to what can actually be activated.** Keeps only session-based permission sets (Session Activation Required) that are already assigned to the user, and shows them as a checkbox list, 10 per page.
 4. **Validates the selection.** On submit, calls SGNL again with one `action: assumePermissionSet` query per selected Id, sent in batches of 20. Activation proceeds only if SGNL returns exactly one Allow per query.
 5. **Activates session permissions.** Inserts `SessionPermSetActivation` records against the user's root session. They apply to that session only. Salesforce deletes the records some time after the session ends, not right away.
@@ -208,7 +208,7 @@ sf project deploy validate --source-dir force-app --source-dir sgnl-credentials 
 - SGNL denied at least one selected permission set at submit time, or an assignment was removed while the page was open. Nothing was activated. The page load and the submit ask SGNL about the same action, so a deny at submit means access changed in between.
 
 **Some of the user's permission sets are missing from the picker**
-- The flow reads up to 600 allowed permission sets. If SGNL allows more, the debug log has `SGNL login flow search returned more than 600 permission sets`. Narrow the `assumePermissionSet` policies.
+- The flow reads every page of allowed permission sets, but stops early if it nears a Salesforce limit (callouts, callout time or heap). The picker also holds at most 600 options, because of the Visualforce view state limit. The debug log says which limit applied: `SGNL login flow search stopped at the ...` or `SGNL login flow: N permission sets are eligible, but the picker holds 600`. Narrow the `assumePermissionSet` policies.
 
 **"Your selection was approved but could not be activated"**
 - The `SessionPermSetActivation` insert failed. Check the debug log for `SGNL login flow activate failed`. Make sure the Login Flow is on the primary login policy.

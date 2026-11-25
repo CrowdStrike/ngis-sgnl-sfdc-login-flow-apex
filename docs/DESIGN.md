@@ -77,15 +77,19 @@ Search and submit ask about the same action, so the picker offers the sets a sub
 
 ### Search paging
 
-The flow reads pages of 200, sending the same body with each page's `nextPageToken`, up to 3 pages (600 sets). Past that it offers the first 600 and logs a warning (`SGNL login flow search returned more than 600 permission sets; offering the first 600.`). The limits behind those numbers:
+The flow reads pages of 200, sending the same body with each page's `nextPageToken`, until SGNL returns no token. It always reads the first page. Before each later page it checks three Apex limits and stops early, with a warning in the debug log, instead of hitting one:
 
-- Each decision carries the asset's attributes. A synchronous Apex callout response and the heap are each capped at 6 MB, and a heap overrun can't be caught, so it would show a raw error page at login. Pages of 200 stay well under that.
-- The picker's options live in view state, which is capped at 170 KB.
-- Callouts in one transaction share a 120-second limit, and each has a 10-second timeout. Page load makes at most 4: the pre-login check and 3 search pages.
+- Callouts: one transaction can make 100. The flow stops when it has used them all.
+- Callout time: callouts in one transaction share 120 seconds, and each has a 10-second timeout. The flow stops when another page could run past 110 seconds, and keeps one callout's time free for the pre-login check, which runs first.
+- Heap: a synchronous transaction has 6 MB, and a heap overrun can't be caught, so it would show a raw error page at login. The flow stops when the heap passes 80% of the limit. Each decision carries the asset's attributes, which `SgnlClient` doesn't keep, so pages of 200 are small.
+
+When the flow stops early, it offers the sets it read and logs `SGNL login flow search stopped at the <limit> after reading N permission sets, and SGNL had more.`
+
+The picker's options and the list of offered ids live in view state, which is capped at 170 KB. The picker therefore holds at most 600 options, about 100 to 120 KB at roughly 150 to 200 bytes an option. If more are eligible, the flow logs `SGNL login flow: N permission sets are eligible, but the picker holds 600 because of the Visualforce view state limit.`
 
 ### Submit batches
 
-SGNL accepts 1 to 20 queries per evaluation, so submit sends the selection in batches of 20, one after another. Approval is all or nothing: the first batch that isn't all Allow, or any failure, stops the loop and nothing is activated. Before each batch, the flow checks the time spent so far; if another batch could run past the callout time limit, it stops and shows "Unable to verify your selection" instead.
+SGNL accepts 1 to 20 queries per evaluation, so submit sends the selection in batches of 20, one after another. Approval is all or nothing: the first batch that isn't all Allow, or any failure, stops the loop and nothing is activated. Before each batch, the flow checks the callouts used and the time spent so far; if another batch could run past the callout limit (100 per transaction) or the callout time limit, it stops, logs the reason, and shows "Unable to verify your selection" instead.
 
 ### Picker pages
 
