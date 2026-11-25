@@ -135,7 +135,7 @@
                                                 }
                                                 var first = page * PAGE_SIZE + 1;
                                                 var last = Math.min((page + 1) * PAGE_SIZE, rows.length);
-                                                status.textContent = 'Showing ' + first + ' to ' + last + ' of ' + rows.length + '. ' + selected + ' selected.';
+                                                status.textContent = 'Page ' + (page + 1) + ' of ' + pages + '. Showing ' + first + ' to ' + last + ' of ' + rows.length + '. ' + selected + ' selected.';
                                                 prev.disabled = page === 0;
                                                 next.disabled = page === pages - 1;
                                             }
