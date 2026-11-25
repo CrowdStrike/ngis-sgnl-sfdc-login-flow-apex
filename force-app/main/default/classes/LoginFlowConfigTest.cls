@@ -2,14 +2,10 @@
 private class LoginFlowConfigTest {
 
     @IsTest
-    static void load_withoutRecord_usesDefaultsDerivedFromOrgId() {
-        String prefix = UserInfo.getOrganizationId().left(15);
-
+    static void load_withoutRecord_usesDefaults() {
         LoginFlowConfig c = LoginFlowConfig.load(null);
 
         Assert.isFalse(c.hasConfigRecord);
-        Assert.areEqual(prefix + '_search', c.routingKeySearch);
-        Assert.areEqual(prefix + '_evaluate', c.routingKeyEvaluate);
         Assert.isFalse(c.preLoginCheckEnabled);
         Assert.areEqual('login', c.preLoginAction);
         Assert.isTrue(String.isNotBlank(c.denialMessage));
@@ -41,16 +37,6 @@ private class LoginFlowConfigTest {
     }
 
     @IsTest
-    static void load_withRecord_stillDerivesRoutingKeys() {
-        String prefix = UserInfo.getOrganizationId().left(15);
-
-        LoginFlowConfig c = LoginFlowConfig.load(new LoginFlow_Config__mdt(Pre_Login_Check_Enabled__c = true));
-
-        Assert.areEqual(prefix + '_search', c.routingKeySearch);
-        Assert.areEqual(prefix + '_evaluate', c.routingKeyEvaluate);
-    }
-
-    @IsTest
     static void load_withBlankFields_fallsBackPerField() {
         LoginFlowConfig c = LoginFlowConfig.load(new LoginFlow_Config__mdt(Pre_Login_Action__c = ' '));
 
@@ -71,13 +57,13 @@ private class LoginFlowConfigTest {
 
     @IsTest
     static void getInstance_prefersMockThenCaches() {
-        LoginFlowConfig m = LoginFlowConfig.buildForTest('s', 'e', true, 'login', 'x', 5);
+        LoginFlowConfig m = LoginFlowConfig.buildForTest(true, 'login', 'x', 5);
         LoginFlowConfig.setMockForTest(m);
         Assert.areEqual(m, LoginFlowConfig.getInstance());
 
         LoginFlowConfig.setMockForTest(null);
         LoginFlowConfig first = LoginFlowConfig.getInstance();
-        Assert.isNotNull(first.routingKeySearch);
+        Assert.isNotNull(first.preLoginAction);
         Assert.areEqual(first, LoginFlowConfig.getInstance(), 'Second call should return the cached instance');
     }
 }

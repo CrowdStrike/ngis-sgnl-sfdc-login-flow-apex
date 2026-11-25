@@ -89,7 +89,7 @@
                                 <apex:outputPanel rendered="{!availablePermSets.size > 0}">
                                     <fieldset class="slds-form-element slds-m-bottom_medium">
                                         <apex:repeat value="{!availablePermSets}" var="opt">
-                                            <div class="slds-form-element__control">
+                                            <div class="slds-form-element__control ngis-permset-row">
                                                 <div class="slds-checkbox">
                                                     <!-- The SLDS label toggles the input only if for= matches VF's generated id. -->
                                                     <apex:inputCheckbox id="chk" value="{!opt.selected}" />
@@ -103,6 +103,60 @@
                                             </div>
                                         </apex:repeat>
                                     </fieldset>
+
+                                    <!-- Pager: shown by the script below when there are more than 10 options -->
+                                    <div id="ngis-permset-pager" class="slds-m-bottom_medium" style="display: none;">
+                                        <button type="button" id="ngis-permset-prev" class="slds-button slds-button_neutral">Previous</button>
+                                        <button type="button" id="ngis-permset-next" class="slds-button slds-button_neutral slds-m-left_x-small">Next</button>
+                                        <div id="ngis-permset-status" class="slds-m-top_x-small" aria-live="polite">
+                                            <p id="ngis-permset-page" class="slds-text-body_regular"></p>
+                                            <p id="ngis-permset-count" class="slds-text-body_regular"></p>
+                                        </div>
+                                    </div>
+
+                                    <!-- Shows 10 options at a time. Rows on other pages are hidden with
+                                         display: none, never disabled, so their checkboxes still submit. -->
+                                    <script>
+                                        (function () {
+                                            var PAGE_SIZE = 10;
+                                            var rows = document.querySelectorAll('.ngis-permset-row');
+                                            var pager = document.getElementById('ngis-permset-pager');
+                                            if (!pager || rows.length <= PAGE_SIZE) { return; }
+                                            var prev = document.getElementById('ngis-permset-prev');
+                                            var next = document.getElementById('ngis-permset-next');
+                                            var pageLabel = document.getElementById('ngis-permset-page');
+                                            var countLabel = document.getElementById('ngis-permset-count');
+                                            var pages = Math.ceil(rows.length / PAGE_SIZE);
+                                            var page = 0;
+                                            function render() {
+                                                var selected = 0;
+                                                for (var i = 0; i < rows.length; i++) {
+                                                    rows[i].style.display = Math.floor(i / PAGE_SIZE) === page ? '' : 'none';
+                                                    var box = rows[i].querySelector('input[type="checkbox"]');
+                                                    if (box) {
+                                                        if (box.checked) { selected++; }
+                                                    }
+                                                }
+                                                var noun = selected === 1 ? 'permission set' : 'permission sets';
+                                                pageLabel.textContent = 'Page ' + (page + 1) + ' of ' + pages;
+                                                countLabel.textContent = selected + ' ' + noun + ' selected';
+                                                prev.disabled = page === 0;
+                                                next.disabled = page === pages - 1;
+                                            }
+                                            prev.addEventListener('click', function () {
+                                                if (page > 0) { page--; render(); }
+                                            });
+                                            next.addEventListener('click', function () {
+                                                if (page < pages - 1) { page++; render(); }
+                                            });
+                                            for (var k = 0; k < rows.length; k++) {
+                                                var b = rows[k].querySelector('input[type="checkbox"]');
+                                                if (b) { b.addEventListener('change', render); }
+                                            }
+                                            pager.style.display = '';
+                                            render();
+                                        })();
+                                    </script>
 
                                     <div class="slds-m-top_medium">
                                         <apex:commandButton value="Accept and Continue"
