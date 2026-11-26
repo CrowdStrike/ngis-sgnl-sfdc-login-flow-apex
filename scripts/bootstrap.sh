@@ -567,7 +567,7 @@ cat <<EOF
 Test Connection calls SGNL as you. It passes only after the SGNL provider
 hook has the application Id path {\$.context.routingKey} and two integration
 assignments for this org's Protected System:
-  Search (list permission sets, with the permission set transform):
+  Search (asset search):
     $CONTEXT_ORG_SEARCH
   Evaluate (access evaluation):
     $CONTEXT_ORG_EVALUATE
@@ -757,7 +757,7 @@ Next steps:
   1. On the SGNL provider hook, set the application Id path to
      {\$.context.routingKey}, then create two integration assignments for
      this org's Protected System, with these application Ids:
-       Search (list permission sets, with the permission set transform):
+       Search (asset search):
          $CONTEXT_ORG_SEARCH
        Evaluate (access evaluation):
          $CONTEXT_ORG_EVALUATE

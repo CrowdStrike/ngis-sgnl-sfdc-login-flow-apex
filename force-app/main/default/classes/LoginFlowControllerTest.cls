@@ -6,10 +6,11 @@ private class LoginFlowControllerTest {
     private static final String PS_REGULAR    = 'LFT_Assigned_Regular';
 
     // ------------------------------------------------------------------
-    // Mock that returns SGNL-shaped responses, routed on the query action.
+    // Mock that returns SGNL-shaped responses, routed on context.routingKey
+    // (search and submit send the same action).
     // listBody == null or evaluateDecision == null makes that call throw.
     //
-    // List responses use the tenant transform shape {decision, permissionSetIds}.
+    // List responses use SGNL's search response {decisions, nextPageToken}.
     // Evaluate responses echo each query's action/assetId with the configured
     // decision, matching the real AccessEvaluationResponse.
     // ------------------------------------------------------------------
@@ -26,12 +27,12 @@ private class LoginFlowControllerTest {
         public HttpResponse respond(HttpRequest req) {
             Map<String, Object> body = (Map<String, Object>) JSON.deserializeUntyped(req.getBody());
             List<Object> queries = (List<Object>) body.get('queries');
-            String action = (String) ((Map<String, Object>) queries[0]).get('action');
+            String routingKey = (String) ((Map<String, Object>) body.get('context')).get('routingKey');
 
             HttpResponse res = new HttpResponse();
             res.setStatusCode(200);
 
-            if (action == SgnlClient.ACTION_LIST_PERMISSION_SETS) {
+            if (routingKey == 'org_search') {
                 if (listBody == null) { throw new CalloutException('list unavailable'); }
                 res.setBody(listBody);
                 return res;
@@ -74,7 +75,23 @@ private class LoginFlowControllerTest {
     }
 
     private static String listBody(List<Id> ids) {
-        return JSON.serialize(new Map<String, Object>{ 'decision' => 'allow', 'permissionSetIds' => ids });
+        return listBody(ids, 'Allow', null);
+    }
+
+    private static String listBody(List<Id> ids, String decision, String nextPageToken) {
+        List<Object> decisions = new List<Object>();
+        for (Id psId : ids) {
+            decisions.add(new Map<String, Object>{
+                'assetId'  => psId,
+                'action'   => SgnlClient.ACTION_ACTIVATE,
+                'decision' => decision
+            });
+        }
+        Map<String, Object> body = new Map<String, Object>{ 'decisions' => decisions };
+        if (nextPageToken != null) {
+            body.put('nextPageToken', nextPageToken);
+        }
+        return JSON.serialize(body);
     }
 
     private static void useConfig(Boolean preLoginEnabled) {
@@ -154,17 +171,50 @@ private class LoginFlowControllerTest {
     }
 
     @IsTest
-    static void init_whenListDenied_setsError() {
+    static void init_whenSgnlDeniesEverySet_passesThrough() {
         useConfig(false);
-        Test.setMock(HttpCalloutMock.class, new SgnlMock('{"decision":"deny","permissionSetIds":[]}', 'Allow'));
+        Test.setMock(HttpCalloutMock.class, new SgnlMock(listBody(new List<Id>{ psId(PS_ASSIGNED) }, 'Deny', null), 'Allow'));
 
         Test.startTest();
         LoginFlowController ctrl = new LoginFlowController();
         ctrl.init();
         Test.stopTest();
 
-        Assert.areEqual(LoginFlowController.MSG_LIST_DENIED, ctrl.errorMessage);
-        Assert.areEqual(0, ctrl.availablePermSets.size());
+        Assert.areEqual(0, ctrl.availablePermSets.size(), 'A Deny decision must not be offered');
+        Assert.isNull(ctrl.errorMessage, 'Nothing allowed is not an error');
+    }
+
+    @IsTest
+    static void init_withMorePages_offersTheFirstPage() {
+        useConfig(false);
+        Test.setMock(HttpCalloutMock.class, new SgnlMock(listBody(new List<Id>{ psId(PS_ASSIGNED) }, 'Allow', 'page-2'), 'Allow'));
+
+        Test.startTest();
+        LoginFlowController ctrl = new LoginFlowController();
+        ctrl.init();
+        Test.stopTest();
+
+        Assert.areEqual(1, ctrl.availablePermSets.size());
+        Assert.isNull(ctrl.errorMessage);
+    }
+
+    @IsTest
+    static void init_offersAtMostTheViewStateSafeNumberOfOptions() {
+        useConfig(false);
+        PermissionSet extra = new PermissionSet(Name = 'LFT_Extra', Label = 'LFT Extra', HasActivationRequired = true);
+        insert extra;
+        insert new PermissionSetAssignment(PermissionSetId = extra.Id, AssigneeId = UserInfo.getUserId());
+        LoginFlowController.maxPickerOptions = 1;
+        Test.setMock(HttpCalloutMock.class, new SgnlMock(listBody(new List<Id>{ psId(PS_ASSIGNED), extra.Id }), 'Allow'));
+
+        Test.startTest();
+        LoginFlowController ctrl = new LoginFlowController();
+        ctrl.init();
+        Test.stopTest();
+
+        Assert.areEqual(1, ctrl.availablePermSets.size());
+        Assert.areEqual(psId(PS_ASSIGNED), ctrl.availablePermSets[0].psId, 'SGNL order is kept');
+        Assert.isNull(ctrl.errorMessage, 'A full picker is not an error');
     }
 
     @IsTest
@@ -336,6 +386,42 @@ private class LoginFlowControllerTest {
         Assert.isNull(activateResult);
         Assert.isNull(skipResult);
         Assert.areEqual(callsAfterInit, m.evaluateCalls, 'activate() must not call SGNL when denied');
+    }
+
+    @IsTest
+    static void activate_manySelections_evaluatesInBatches() {
+        useConfig(false);
+        // 21 more assigned session sets, 22 in total: two evaluation batches (20 + 2)
+        List<PermissionSet> extra = new List<PermissionSet>();
+        for (Integer i = 1; i <= 21; i++) {
+            extra.add(new PermissionSet(Name = 'LFT_Batch_' + i, Label = 'LFT Batch ' + i, HasActivationRequired = true));
+        }
+        insert extra;
+        List<PermissionSetAssignment> psas = new List<PermissionSetAssignment>();
+        List<Id> allIds = new List<Id>{ psId(PS_ASSIGNED) };
+        for (PermissionSet ps : extra) {
+            psas.add(new PermissionSetAssignment(PermissionSetId = ps.Id, AssigneeId = UserInfo.getUserId()));
+            allIds.add(ps.Id);
+        }
+        insert psas;
+        // No real AuthSession can exist in a test, so the insert fails after approval
+        LoginFlowController.sessionIdOverride = Id.valueOf('0Ak000000000001');
+        SgnlMock m = new SgnlMock(listBody(allIds), 'Allow');
+
+        Test.startTest();
+        Test.setMock(HttpCalloutMock.class, m);
+        LoginFlowController ctrl = new LoginFlowController();
+        ctrl.init();
+        for (LoginFlowController.PermSetOption opt : ctrl.availablePermSets) {
+            opt.selected = true;
+        }
+        PageReference result = ctrl.activate();
+        Test.stopTest();
+
+        Assert.areEqual(22, ctrl.availablePermSets.size());
+        Assert.areEqual(2, m.evaluateCalls, 'Selections are evaluated 20 at a time');
+        Assert.isNull(result);
+        Assert.areEqual(LoginFlowController.MSG_ACTIVATE_FAILED, ctrl.errorMessage, 'Approved, then the insert failed');
     }
 
     // NOTE: the successful SessionPermSetActivation insert is not unit-tested:

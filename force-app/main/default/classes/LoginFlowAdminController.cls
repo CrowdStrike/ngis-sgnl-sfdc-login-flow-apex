@@ -4,9 +4,9 @@
  * Read-only: shows the effective configuration, the SGNL provider hook
  * values for this org, and links to Setup, where
  * admins edit the LoginFlow_Config__mdt.Default record (needs Customize
- * Application). Also exposes a test-connection endpoint that fires a
- * listPermissionSets call through the NGIS_SGNL_Access Named Credential so
- * admins can verify credentials without triggering a real login flow.
+ * Application). Also exposes a test-connection endpoint that fires the
+ * login's permission set search through the NGIS_SGNL_Access Named Credential
+ * so admins can verify credentials without triggering a real login flow.
  */
 public with sharing class LoginFlowAdminController {
 
@@ -86,9 +86,9 @@ public with sharing class LoginFlowAdminController {
     }
 
     /**
-     * Fires a listPermissionSets call against SGNL as the current user using
-     * the saved config. Never throws for auth/HTTP errors, so the UI can show
-     * useful diagnostics.
+     * Fires the login's permission set search (activate, no
+     * assetId) against SGNL as the current user using the saved config. Never
+     * throws for auth/HTTP errors, so the UI can show useful diagnostics.
      */
     @AuraEnabled
     public static TestResultDTO testConnection() {
@@ -96,7 +96,7 @@ public with sharing class LoginFlowAdminController {
         TestResultDTO result = new TestResultDTO();
         try {
             HttpResponse res = SgnlClient.send(SgnlClient.currentPrincipalId(), c.routingKeySearch, new List<SgnlClient.Query>{
-                new SgnlClient.Query(SgnlClient.ACTION_LIST_PERMISSION_SETS, null)
+                new SgnlClient.Query(SgnlClient.ACTION_ACTIVATE, null)
             });
             result.statusCode = res.getStatusCode();
             result.body       = res.getBody();

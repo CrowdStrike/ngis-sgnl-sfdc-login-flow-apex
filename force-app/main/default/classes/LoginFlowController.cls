@@ -1,7 +1,6 @@
 public with sharing class LoginFlowController {
 
     @TestVisible private static final String MSG_LIST_FAILED   = 'Unable to load permission sets right now. You can continue without them.';
-    @TestVisible private static final String MSG_LIST_DENIED   = 'Access denied by SGNL. Contact your administrator.';
     @TestVisible private static final String MSG_NO_SELECTION  = 'Please select at least one permission set, or click "Continue without activating".';
     // Shown on an SGNL deny at submit, or when the selection no longer
     // matches what was offered or assigned. Wording agreed with product.
@@ -31,6 +30,10 @@ public with sharing class LoginFlowController {
     // getCurrentSession() throws "Current session unavailable" in tests
     @TestVisible private static Id sessionIdOverride;
 
+    // Most options the picker holds. The options and offeredIds live in view
+    // state, which Visualforce caps at 170 KB.
+    @TestVisible private static Integer maxPickerOptions = 600;
+
     public LoginFlowController() {
         this.cfg = LoginFlowConfig.getInstance();
         this.availablePermSets       = new List<PermSetOption>();
@@ -53,36 +56,43 @@ public with sharing class LoginFlowController {
         }
 
         // Step 1: ask SGNL which permission sets the user may assume.
-        SgnlClient.ListResponse listed;
+        SgnlClient.SearchResponse found;
         try {
-            listed = SgnlClient.listPermissionSets(SgnlClient.currentPrincipalId(), cfg.routingKeySearch);
+            found = SgnlClient.searchPermissionSets(SgnlClient.currentPrincipalId(), cfg.routingKeySearch);
         } catch (Exception e) {
-            logFailure('listPermissionSets', e);
+            logFailure('search', e);
             errorMessage = MSG_LIST_FAILED;
             return null; // page shows the error and a Continue button
         }
-        if (!listed.isAllowed()) {
-            errorMessage = MSG_LIST_DENIED;
-            return null; // page shows the error and a Continue button
+        if (String.isNotBlank(found.nextPageToken)) {
+            System.debug(LoggingLevel.WARN, 'SGNL login flow search returned more than one page of permission sets; '
+                + 'offering the first page. Narrow the policies that allow activate.');
         }
-        List<Id> sgnlIds = toPermSetIds(listed.permissionSetIds);
+        List<Id> sgnlIds = toPermSetIds(SgnlClient.allowedAssetIds(found, SgnlClient.ACTION_ACTIVATE));
 
         Map<Id, String> eligible = new Privileged().eligiblePermSets(sgnlIds);
-        if (eligible.size() < sgnlIds.size()) {
-            System.debug(LoggingLevel.WARN, 'SGNL returned ' + sgnlIds.size() + ' permission sets; '
-                + eligible.size() + ' are session-based and assigned to the user.');
-        }
+        // Counts for admins: a large gap or a large count suggests a broad policy
+        System.debug(LoggingLevel.INFO, 'SGNL login flow: SGNL allowed ' + sgnlIds.size()
+            + ' permission sets; ' + Math.min(eligible.size(), maxPickerOptions) + ' are offered.');
         if (eligible.isEmpty()) {
             return getFinishUrl(); // nothing to activate, pass through silently
         }
 
         // Iterate sgnlIds, not the map, to keep SGNL's order in the picker
         for (Id psId : sgnlIds) {
+            if (availablePermSets.size() >= maxPickerOptions) {
+                break;
+            }
             if (eligible.containsKey(psId)) {
                 availablePermSets.add(new PermSetOption(psId, eligible.get(psId)));
+                offeredIds.add(psId);
             }
         }
-        offeredIds.addAll(eligible.keySet());
+        if (eligible.size() > availablePermSets.size()) {
+            System.debug(LoggingLevel.WARN, 'SGNL login flow: ' + eligible.size() + ' permission sets are eligible, '
+                + 'but the picker holds ' + maxPickerOptions + ' because of the Visualforce view state limit. '
+                + 'Narrow the policies that allow activate.');
+        }
         return null;
     }
 
@@ -117,15 +127,16 @@ public with sharing class LoginFlowController {
 
         List<SgnlClient.Query> queries = new List<SgnlClient.Query>();
         for (Id psId : selectedIds) {
-            queries.add(new SgnlClient.Query(SgnlClient.ACTION_ASSUME_PERMISSION_SET, psId));
+            queries.add(new SgnlClient.Query(SgnlClient.ACTION_ACTIVATE, psId));
         }
+
+        System.debug(LoggingLevel.INFO, 'SGNL login flow: ' + selectedIds.size() + ' permission sets selected.');
 
         Boolean approved;
         try {
-            SgnlClient.EvaluateResponse res = SgnlClient.evaluate(SgnlClient.currentPrincipalId(), cfg.routingKeyEvaluate, queries);
-            approved = SgnlClient.allAllowed(queries, res);
+            approved = SgnlClient.allAllowedInBatches(SgnlClient.currentPrincipalId(), cfg.routingKeyEvaluate, queries);
         } catch (Exception e) {
-            logFailure('assumePermissionSet', e);
+            logFailure('submit', e);
             errorMessage = MSG_VERIFY_FAILED;
             return null;
         }
