@@ -53,7 +53,7 @@ That value lives in its own key, `routingKey`, so `org` stays the real Org Id in
 
 The suffix is hidden from admins. `LoginFlowConfig` always derives both routing keys from the running org; there is no override. The admin page and the bootstrap script print the application Id path and the exact application Ids for the SGNL side. An override could only disagree with the provider hook, and a sandbox refresh copies config records, so a production override would point a refreshed sandbox at production's Protected System.
 
-Both calls send the same action, `activate`, so one policy covers both and the picker offers exactly what submit would allow. The routing key, not the action, decides whether a request is a search or an evaluation.
+Both calls send the same action, `activate`. The routing key, not the action, decides whether a request is a search or an evaluation.
 
 Both responses are SGNL's own types. `SgnlClient` deserializes both into typed classes; fields it doesn't model are ignored, and a type mismatch is wrapped as `SgnlException`.
 
