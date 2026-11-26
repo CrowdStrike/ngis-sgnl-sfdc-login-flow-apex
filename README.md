@@ -13,9 +13,9 @@ Salesforce Screen Flows are the out-of-the-box tool for Login Flows, but they ge
 ### What it does
 
 1. **Optional pre-login check.** If enabled, evaluates a configured SGNL action (default `login`). On deny, or if SGNL can't be reached, the user sees a denial message and is signed out.
-2. **Fetches available permission sets.** Calls SGNL with `action: listPermissionSets`. SGNL returns the Salesforce Permission Set Ids the user is authorized to assume.
-3. **Filters to what can actually be activated.** Keeps only session-based permission sets (Session Activation Required) that are already assigned to the user, and shows them as a checkbox list.
-4. **Validates the selection.** On submit, calls SGNL again with one `action: assumePermissionSet` query per selected Id. Activation proceeds only if SGNL returns exactly one Allow per query.
+2. **Fetches available permission sets.** Searches SGNL with `action: activate` and no asset. SGNL returns the Salesforce Permission Set Ids the user is authorized to assume.
+3. **Filters to what can actually be activated.** Keeps only session-based permission sets (Session Activation Required) that are already assigned to the user, and shows them as a checkbox list, 10 per page.
+4. **Validates the selection.** On submit, calls SGNL again with one `action: activate` query per selected Id, in batches of 20. Activation proceeds only if SGNL returns exactly one Allow per query.
 5. **Activates session permissions.** Inserts `SessionPermSetActivation` records against the user's root session. They apply to that session only. Salesforce deletes the records some time after the session ends, not right away.
 6. **Completes the login.** Returns the `PageReference` from `Auth.SessionManagement.finishLoginFlow()` so Salesforce routes the user to their destination.
 
@@ -56,7 +56,7 @@ Salesforce Screen Flows are the out-of-the-box tool for Login Flows, but they ge
   - application Id `<orgid>_evaluate`, routed to access evaluation.
 
   `<orgid>` is the 15-character Salesforce Org Id. The flow derives both routing keys from the running org, and the admin page and the bootstrap script print them, so there's nothing to type in Salesforce.
-- Policies for the `listPermissionSets`, `assumePermissionSet` and (if used) pre-login actions.
+- Policies for the `activate` action and, if used, the pre-login action. The same `activate` policy decides both which sets the picker offers and whether the selection is approved.
 
 **Salesforce**
 
@@ -129,7 +129,7 @@ The routing keys aren't configurable. They're always the running org's 15-charac
 
 ### Admin page
 
-Open **Continuous Identity Admin** from the App Launcher (requires `NGIS SGNL Login Flow Admin`). It shows the saved configuration, and the application Id path and two application Ids to enter on the SGNL provider hook for this org. Its **Test Connection** button makes a live `listPermissionSets` call as you and shows the raw response and a hint on failure. A **Setup Checklist** below shows whether the client credentials are set, what to enter on the SGNL provider hook, the Test Connection result, and how to attach the Login Flow, with links to the Setup pages.
+Open **Continuous Identity Admin** from the App Launcher (requires `NGIS SGNL Login Flow Admin`). It shows the saved configuration, and the application Id path and two application Ids to enter on the SGNL provider hook for this org. Its **Test Connection** button runs the login's permission set search as you and shows the raw response and a hint on failure. A **Setup Checklist** below shows whether the client credentials are set, what to enter on the SGNL provider hook, the Test Connection result, and how to attach the Login Flow, with links to the Setup pages.
 
 ---
 
@@ -189,8 +189,8 @@ sf project deploy validate --source-dir force-app --source-dir sgnl-credentials 
 **Test Connection returns HTTP 401 or 403**
 - The authorizer rejected the token. Check the Falcon API client has `sgnl-access:read` and is mapped to your SGNL provider.
 
-**"Access denied by SGNL" on page load**
-- SGNL doesn't recognize the user, or no policy allows `listPermissionSets`. Verify the Salesforce username matches the principal SGNL expects, and that the provider hook's application Ids match the ones on the admin page.
+**The user logs straight in with no permission set picker**
+- SGNL allowed no permission set the user can activate. Check that SGNL recognizes the user (the Salesforce username must match the principal SGNL expects), that a policy allows `activate` on the sets, that the sets are session-based and assigned to the user, and that the provider hook's application Ids match the ones on the admin page. The debug log line `SGNL login flow: SGNL allowed N permission sets; M are offered.` shows which step dropped them.
 
 **The picker is skipped even though SGNL returns permission sets**
 - The flow only offers session-based permission sets assigned to the user. Check **Session Activation Required** and the user's assignments.
@@ -199,7 +199,7 @@ sf project deploy validate --source-dir force-app --source-dir sgnl-credentials 
 - With the pre-login check on, any SGNL or credential failure denies. Turn the check off in the config record, then fix connectivity using Test Connection.
 
 **"Your permitted access has changed" after submitting**
-- SGNL denied at least one selected permission set at submit time, or an assignment was removed while the page was open. Nothing was activated. If SGNL listed the set but denies `assumePermissionSet`, check that the two policies agree.
+- SGNL denied at least one selected permission set at submit time, or an assignment was removed while the page was open. Nothing was activated. The search and the submit use the same `activate` policy, so a set that was offered and then denied means the user's access changed between page load and submit.
 
 **"Your selection was approved but could not be activated"**
 - The `SessionPermSetActivation` insert failed. Check the debug log for `SGNL login flow activate failed`. Make sure the Login Flow is on the primary login policy.

@@ -53,7 +53,29 @@ That value lives in its own key, `routingKey`, so `org` stays the real Org Id in
 
 The suffix is hidden from admins. `LoginFlowConfig` always derives both routing keys from the running org; there is no override. The admin page and the bootstrap script print the application Id path and the exact application Ids for the SGNL side. An override could only disagree with the provider hook, and a sandbox refresh copies config records, so a production override would point a refreshed sandbox at production's Protected System.
 
-Neither route has a transform, so both responses are SGNL's own types. The list response is SGNL's asset search response: `decisions[]`, each with `assetId`, `action` and `decision`, plus `nextPageToken` and `principalId`. The flow offers a permission set only for a decision that is `Allow`, has an `assetId`, and has the action `listPermissionSets` or none. The provider route returns one page of up to 1000 allowed assets and doesn't take paging parameters, so the flow reads that page only and logs a warning when `nextPageToken` is set. The evaluate response (`assumePermissionSet` and pre-login) is SGNL's `AccessEvaluationResponse`: `decisions[]` plus `principalId`, with `action` and `assetId` optional on each decision. `SgnlClient` deserializes both into typed classes; fields it doesn't model are ignored, and a type mismatch is wrapped as `SgnlException`.
+Both calls send the same action, `activate`, so one policy covers both and the picker offers exactly what submit would allow. The routing key, not the action, decides whether a request is a search or an evaluation.
+
+Neither route has a transform, so both responses are SGNL's own types. `SgnlClient` deserializes both into typed classes; fields it doesn't model are ignored, and a type mismatch is wrapped as `SgnlException`.
+
+### Search
+
+The search sends one `activate` query with no `assetId`. SGNL returns its asset search response: `decisions[]`, each with `assetId`, `action` and `decision`, plus `nextPageToken` and `principalId`. `SgnlClient.allowedAssetIds()` keeps a decision only if it is `Allow` (case-insensitive), its `action` is `activate` or absent, and its `assetId` isn't blank. The `assetId` is the permission set Id.
+
+The provider route returns one page of up to 1000 allowed permission sets and doesn't take paging parameters. The flow reads that page only; when `nextPageToken` is set, it offers what it read and logs `SGNL login flow search returned more than one page of permission sets; offering the first page.`
+
+The picker's options and the list of offered ids live in view state, which is capped at 170 KB. The picker therefore holds at most 600 options, about 100 to 120 KB at roughly 150 to 200 bytes an option. If more are eligible, the flow logs `SGNL login flow: N permission sets are eligible, but the picker holds 600 because of the Visualforce view state limit.`
+
+### Submit batches
+
+SGNL accepts 1 to 20 queries per evaluation, so submit sends the selection in batches of 20, one after another. Approval is all or nothing: the first batch that isn't all Allow, or any failure, stops the loop and nothing is activated. Before each batch, the flow checks the callouts used and the time spent so far; if another batch could run past the callout limit (100 per transaction) or the callout time limit (110 of the transaction's 120 seconds), it stops, logs the reason, and shows "Unable to verify your selection" instead.
+
+### Picker pages
+
+When more than 10 permission sets are offered, the picker shows 10 at a time with Previous and Next, and a status line with the page and how many permission sets are selected. Paging happens in the browser: every option is on the page, rows on other pages are hidden, and their checkboxes are still submitted.
+
+### Counts in the debug log
+
+Each page load logs how many permission sets SGNL allowed and how many are offered (`SGNL login flow: SGNL allowed N permission sets; M are offered.`). Each submit logs how many were selected. A large gap or a large count suggests a policy that's broader than it needs to be.
 
 ### Decision matching
 
@@ -63,9 +85,9 @@ Neither route has a transform, so both responses are SGNL's own types. The list 
 - every `decision` is `Allow`, compared case-insensitively;
 - any `action` or `assetId` a decision echoes back matches the query at the same index. Asset ids compare as `Id`, so 15- and 18-character forms match.
 
-The list call compares `decision` to `Allow` case-insensitively too.
+Submit applies it to each batch.
 
-A partial deny at submit activates nothing, by product decision. SGNL returns one decision per query in order, so a partial grant would be safe, but the list and submit calls are seconds apart, so a deny between them means the user's access changed. The message asks them to sign out and log in again to have it re-evaluated, or continue without activating.
+A partial deny at submit activates nothing, by product decision. SGNL returns one decision per query in order, so a partial grant would be safe, but the search and submit calls are seconds apart, so a deny between them means the user's access changed. The message asks them to sign out and log in again to have it re-evaluated, or continue without activating.
 
 ---
 
@@ -76,8 +98,8 @@ Every SGNL path in the controller catches all exceptions: `SgnlException` (non-2
 | Path | On failure |
 |------|------------|
 | Pre-login check | Deny (fail closed) |
-| `listPermissionSets` | Error banner; user can continue without permission sets |
-| `assumePermissionSet` | Stay on the page with an error |
+| Search (`activate`, no asset) | Error banner; user can continue without permission sets |
+| Submit (`activate` per set) | Stay on the page with an error |
 | `SessionPermSetActivation` insert | Stay on the page with an error |
 
 A list failure deliberately doesn't deny: it means the user logs in with least privilege. Use the pre-login check if SGNL availability should gate login itself.
@@ -188,7 +210,7 @@ Salesforce lets a user activate their own assigned session permission sets with 
 
 - Read-only: the saved values (blank fields labeled with the default they fall back to), whether a `Default` record exists, and an **Edit in Setup** link to the record's edit form.
 - A setup checklist: client credentials, SGNL provider hook, Test Connection, attaching the Login Flow. The credential status comes from `ConnectApi.NamedCredentials.getCredential()` for the `NGIS_SGNL_Principal` principal. If the status can't be read, for example because the admin lacks the permission it needs, the page shows Unknown and stays usable. Apex can't tell whether a profile has the Login Flow attached, so that step is instructions and a link only.
-- **Test Connection** fires a live `listPermissionSets` call as the admin. It never throws: callout failures (including token-fetch failures) return `statusCode: 0` with the exception text and a hint; 401/403 get a hint about the API client's scope and provider mapping. It tests the saved configuration, not anything typed on the page.
+- **Test Connection** runs the login's permission set search as the admin. It never throws: callout failures (including token-fetch failures) return `statusCode: 0` with the exception text and a hint; 401/403 get a hint about the API client's scope and provider mapping. It tests the saved configuration, not anything typed on the page.
 - The admin needs External Credential principal access because Test Connection calls out as them; `NGIS_SGNL_Login_Flow_Admin` grants it along with the app and tab.
 
 ---
