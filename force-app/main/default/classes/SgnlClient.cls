@@ -19,11 +19,19 @@ public with sharing class SgnlClient {
     public static final String  PATH             = '/v1/providers';
     public static final Integer TIMEOUT_MS       = 10000;
 
+    // SGNL accepts 1 to 20 queries per evaluation request
+    public static final Integer MAX_EVALUATION_QUERIES = 20;
+
     // applicationIdPath the provider hook must use to match routing keys
     public static final String ROUTING_KEY_PATH  = '{$.context.routingKey}';
 
-    public static final String ACTION_LIST_PERMISSION_SETS = 'listPermissionSets';
-    public static final String ACTION_ASSUME_PERMISSION_SET = 'assumePermissionSet';
+    // The one action the flow sends for permission sets: the search asks which
+    // sets it would allow, and submit evaluates it for each selected set.
+    public static final String ACTION_ACTIVATE = 'activate';
+
+    // Callout time a transaction may use (the platform limit is 120 s), with
+    // room left so the page can still render an error.
+    @TestVisible private static Long calloutBudgetMs = 110000;
 
     public class SgnlException extends Exception {}
 
@@ -128,9 +136,13 @@ public with sharing class SgnlClient {
         return new Http().send(req);
     }
 
-    public static SearchResponse listPermissionSets(String principalId, String routingKey) {
+    /**
+     * One page of the permission sets SGNL would allow principalId to assume:
+     * an activate search with no assetId.
+     */
+    public static SearchResponse searchPermissionSets(String principalId, String routingKey) {
         HttpResponse res = sendChecked(principalId, routingKey, new List<Query>{
-            new Query(ACTION_LIST_PERMISSION_SETS, null)
+            new Query(ACTION_ACTIVATE, null)
         });
         return (SearchResponse) parse(res, SearchResponse.class);
     }
@@ -164,6 +176,36 @@ public with sharing class SgnlClient {
     public static EvaluateResponse evaluate(String principalId, String routingKey, List<Query> queries) {
         HttpResponse res = sendChecked(principalId, routingKey, queries);
         return (EvaluateResponse) parse(res, EvaluateResponse.class);
+    }
+
+    /**
+     * Evaluates queries in batches of MAX_EVALUATION_QUERIES and returns true
+     * only if allAllowed() accepts every batch. Stops at the first rejected
+     * batch. Throws SgnlException rather than start a batch that could run
+     * past the transaction's callout limit or callout time limit.
+     */
+    public static Boolean allAllowedInBatches(String principalId, String routingKey, List<Query> queries) {
+        if (queries == null || queries.isEmpty()) {
+            return false;
+        }
+        Long started = System.currentTimeMillis();
+        for (Integer first = 0; first < queries.size(); first += MAX_EVALUATION_QUERIES) {
+            if (Limits.getCallouts() >= Limits.getLimitCallouts()) {
+                throw new SgnlException('SGNL evaluation stopped before the callout limit');
+            }
+            if (System.currentTimeMillis() - started + TIMEOUT_MS > calloutBudgetMs) {
+                throw new SgnlException('SGNL evaluation stopped before the callout time limit');
+            }
+            List<Query> batch = new List<Query>();
+            Integer last = Math.min(first + MAX_EVALUATION_QUERIES, queries.size());
+            for (Integer i = first; i < last; i++) {
+                batch.add(queries[i]);
+            }
+            if (!allAllowed(batch, evaluate(principalId, routingKey, batch))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
