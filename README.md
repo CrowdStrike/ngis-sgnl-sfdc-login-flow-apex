@@ -1,22 +1,22 @@
 # ngis-sgnl-sfdc-login-flow-apex
 
-A Salesforce Login Flow, implemented in Apex and Visualforce, that asks SGNL which session-based permission sets a user may activate, lets the user pick from them at login, re-validates the selection with SGNL, and activates the approved permission sets for that session only.
+A Salesforce Login Flow, implemented in Apex and Visualforce, that asks NGIS which session-based permission sets a user may activate, lets the user pick from them at login, re-validates the selection with NGIS, and activates the approved permission sets for that session only.
 
-SGNL is reached through the CrowdStrike access API using Falcon OAuth2 client credentials.
+The Falcon Platform is reached through the CrowdStrike Access API using OAuth2 client credentials.
 
 ---
 
 ## Overview
 
-Salesforce Screen Flows are the out-of-the-box tool for Login Flows, but they get painful once you need callouts and conditional logic. This project uses an Apex controller and a Visualforce page instead, while still plugging into Salesforce's native Login Flow mechanism.
+Salesforce Screen Flows are the out-of-the-box tool for Login Flows, but they get painful once you need callouts and conditional logic. This plug-in uses an Apex controller and a Visualforce page instead, while still plugging into Salesforce's native Login Flow mechanism.
 
 ### What it does
 
-1. **Optional pre-login check.** If enabled, evaluates a configured SGNL action (default `login`). On deny, or if SGNL can't be reached, the user sees a denial message and is signed out.
-2. **Fetches available permission sets.** Searches SGNL with `action: activate` and no asset. SGNL returns the Salesforce Permission Set Ids the user is authorized to assume.
+1. **Optional pre-login check.** If enabled, evaluates a configured policy action (default `login`). If access is not granted, the user sees a denial message and is signed out.
+2. **Fetches available permission sets.** Searches NGIS with `action: activate` and no asset, and the platform returns the Salesforce Permission Set Ids the user is authorized to assume.
 3. **Filters to what can actually be activated.** Keeps only session-based permission sets (Session Activation Required) that are already assigned to the user, and shows them as a checkbox list, 10 per page.
-4. **Validates the selection.** On submit, calls SGNL again with one `action: activate` query per selected Id, in batches of 20. Activation proceeds only if SGNL returns exactly one Allow per query.
-5. **Activates session permissions.** Inserts `SessionPermSetActivation` records against the user's root session. They apply to that session only. Salesforce deletes the records some time after the session ends, not right away.
+4. **Validates the selection.** On submit, calls NGIS again with one `action: activate` query per selected Id, in batches of 20. Activation proceeds only if the Permission Set is allowed.
+5. **Activates session permissions.** Inserts `SessionPermSetActivation` records against the user's session. They apply to that session only. Salesforce deletes the records after the session ends.
 6. **Completes the login.** Returns the `PageReference` from `Auth.SessionManagement.finishLoginFlow()` so Salesforce routes the user to their destination.
 
 ---
@@ -50,8 +50,8 @@ Salesforce Screen Flows are the out-of-the-box tool for Login Flows, but they ge
 **CrowdStrike / SGNL**
 
 - A Falcon API client (client id and secret) with the `sgnl-access:read` scope.
-- That API client mapped to your SGNL provider.
-- An SGNL provider hook whose application Id path is `{$.context.routingKey}`, with two integration assignments for this org's Protected System:
+- That API client mapped to your Enforcement Point.
+- An Enforcement Point whose application Id path is `{$.context.routingKey}`, with two integration assignments for this org's Protected System:
   - application Id `<orgid>_search`, routed to asset search;
   - application Id `<orgid>_evaluate`, routed to access evaluation.
 
@@ -89,7 +89,7 @@ It prompts for:
 4. **Profiles**: one or more, by number or name, separated by commas (for example `4,5`), from a list of profiles with active users. Choose the profiles whose users should see the permission set picker, not the one your admin account uses.
 5. **Pre-login check**: optional
 
-Then it deploys `force-app` and `sgnl-credentials`, creates the `LoginFlow_Config.Default` record with every setting filled in (see [Configuration](#configuration)), sets the client id and secret on the `NGIS_SGNL_Principal` principal, assigns `NGIS_SGNL_Login_Flow_Admin` to you, grants each chosen profile access to the flow's page, Apex classes and credential principal, and prints the two SGNL provider hook application Ids for this org. It then offers to run Test Connection, using the credentials saved in the org if you didn't enter any, and shows the result. Next it asks, profile by profile, whether to attach the Login Flow. If Test Connection didn't pass, it warns first: with the pre-login check on, every user on an attached profile is denied until SGNL is reachable. If a profile already has a different Login Flow, it asks before replacing it. It won't use your own profile.
+Then it deploys `force-app` and `sgnl-credentials`, creates the `LoginFlow_Config.Default` record with every setting filled in (see [Configuration](#configuration)), sets the client id and secret on the `NGIS_SGNL_Principal` principal, assigns `NGIS_SGNL_Login_Flow_Admin` to you, grants each chosen profile access to the flow's page, Apex classes and credential principal, and prints the Ids for this org. It then offers to run Test Connection, using the credentials saved in the org if you didn't enter any, and shows the result. Next it asks, profile by profile, whether to attach the Login Flow.
 
 The script is safe to re-run. Existing grants and assignments are left alone; credentials are updated in place; an existing config record is kept unless you choose to overwrite its pre-login fields. To add the flow to more profiles later, run it again and choose them.
 
@@ -138,15 +138,15 @@ Open **Continuous Identity Admin** from the App Launcher (requires `NGIS SGNL Lo
 When enabled, the flow evaluates the pre-login action before the picker renders:
 
 - **Allow**: continue to the permission set picker.
-- **Deny, or any error** (SGNL unreachable, token failure, malformed response): fail closed. The page shows the denial message and signs the user out after the configured delay.
+- **Deny**: fail closed. The page shows the denial message and signs the user out after the configured delay.
 
-Because errors deny, an SGNL or credential outage locks out every user on the profile while the check is on. Turn the check off in the config record if you need availability during an outage.
+Due to the default configuration to fail-closed if a decision cannot be reached, turn the check off if you need availability during an outage.
 
 ---
 
 ## Rollout
 
-- Never attach the Login Flow to the profile of your only administrator until you've tested it with another user.
+- Never attach the Login Flow to the profile of your only administrator until you've tested it with other users.
 - Users added to the profile later need nothing extra: the flow's access is on the profile.
 - Test with a non-admin user on the profile: log out, log back in, and confirm the picker appears and activation works.
 
@@ -206,12 +206,6 @@ sf project deploy validate --source-dir force-app --source-dir sgnl-credentials 
 
 **Continuous Identity Admin is missing from App Launcher**
 - Assign `NGIS SGNL Login Flow Admin`. It grants the app and tab visibility.
-
----
-
-## Design notes
-
-For the reasoning behind the non-obvious parts (Login Flow quirks, session activation, view state), see [`docs/DESIGN.md`](docs/DESIGN.md).
 
 ---
 
