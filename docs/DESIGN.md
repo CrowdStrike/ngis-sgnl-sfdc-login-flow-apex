@@ -55,7 +55,7 @@ The suffix is hidden from admins. `LoginFlowConfig` always derives both routing 
 
 Both calls send the same action, `activate`, so one policy covers both and the picker offers exactly what submit would allow. The routing key, not the action, decides whether a request is a search or an evaluation.
 
-Neither route has a transform, so both responses are SGNL's own types. `SgnlClient` deserializes both into typed classes; fields it doesn't model are ignored, and a type mismatch is wrapped as `SgnlException`.
+Both responses are SGNL's own types. `SgnlClient` deserializes both into typed classes; fields it doesn't model are ignored, and a type mismatch is wrapped as `SgnlException`.
 
 ### Search
 

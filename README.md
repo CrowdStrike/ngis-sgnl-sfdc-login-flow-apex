@@ -51,7 +51,7 @@ Salesforce Screen Flows are the out-of-the-box tool for Login Flows, but they ge
 
 - A Falcon API client (client id and secret) with the `sgnl-access:read` scope.
 - That API client mapped to your SGNL provider.
-- An SGNL provider hook whose application Id path is `{$.context.routingKey}`, with two integration assignments for this org's Protected System, neither with a transform:
+- An SGNL provider hook whose application Id path is `{$.context.routingKey}`, with two integration assignments for this org's Protected System:
   - application Id `<orgid>_search`, routed to asset search;
   - application Id `<orgid>_evaluate`, routed to access evaluation.
 
